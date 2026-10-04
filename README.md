@@ -115,10 +115,15 @@ no default note box; the five extra fields only appear after an unidentified req
 ```bash
 cd app
 npm install
-EXPO_PUBLIC_API_URL=http://localhost:3000 npx expo start
+npx expo start
 ```
 
-- `EXPO_PUBLIC_API_URL` defaults to `http://localhost:3000`.
+- The app talks to the **Backend URL** field on the Input screen. It defaults to
+  `EXPO_PUBLIC_API_URL` when the bundle is built, else `http://172.93.111.86:3000` (this box on its
+  LAN). Edit the field in-app to point anywhere — e.g. `http://100.97.62.62:3000` (this box's
+  Tailscale address, reachable from a phone on cellular) or `http://localhost:3000` for a tunnel.
+- The server listens on all interfaces (`0.0.0.0:3000`), so the same backend answers on localhost,
+  the LAN address and the Tailscale address.
 - Input: `Photo | Link` toggle; Photo uses `expo-image-picker` (camera + library); Link is a URL
   field; one primary **Appraise** button. Loading and backend-unreachable states are shown.
 - Value: large value range, confidence level + coverage, `Why this value`, `Identified` fields,
@@ -133,14 +138,22 @@ export PATH=$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH
 
 emulator -avd se_api35 -no-snapshot -no-audio -no-window -gpu swiftshader_indirect &
 adb wait-for-device
-adb reverse tcp:3000 tcp:3000          # lets the device reach the host backend
 
 cd server && npm install && npm run ingest && npm start &
 cd app && npm install
 npx expo run:android                    # or: npx expo prebuild -p android && ./android/gradlew assembleDebug
 ```
 
-`adb reverse tcp:3000 tcp:3000` is required because the app targets `http://localhost:3000`.
+The default backend (`http://172.93.111.86:3000`) is the host's LAN address, which the emulator
+reaches directly. If you set the field to `http://localhost:3000` instead, run
+`adb reverse tcp:3000 tcp:3000` first.
+
+### Testing on a phone
+
+The release APK already points at the box's LAN address. Put the phone on the same Wi-Fi and open
+the app; if the phone is on cellular, edit **Backend URL** to the box's Tailscale address
+(`http://100.97.62.62:3000`) and make sure Tailscale is up on the phone. No rebuild needed either
+way.
 
 ### Release APK
 

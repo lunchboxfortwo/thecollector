@@ -14,7 +14,15 @@ import {
 import { StatusBar } from 'expo-status-bar';
 import * as ImagePicker from 'expo-image-picker';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3000';
+// Reachable address of the box running the backend, so a real phone can hit it
+// over Wi-Fi or Tailscale. Override per-build with EXPO_PUBLIC_API_URL, or in-app.
+const DEFAULT_API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://172.93.111.86:3000';
+
+function normalizeApiUrl(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return DEFAULT_API_URL;
+  return trimmed.replace(/\/+$/, '');
+}
 
 const COLORS = {
   bg: '#111111',
@@ -60,6 +68,7 @@ export default function App() {
   const [link, setLink] = useState('');
   const [hints, setHints] = useState(EMPTY_HINTS);
   const [result, setResult] = useState(null);
+  const [apiUrl, setApiUrl] = useState(DEFAULT_API_URL);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
@@ -113,8 +122,9 @@ export default function App() {
     }
     if (Object.keys(cleanHints).length) body.hints = cleanHints;
 
+    const base = normalizeApiUrl(apiUrl);
     try {
-      const res = await fetch(`${API_URL}/appraise`, {
+      const res = await fetch(`${base}/appraise`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -128,7 +138,7 @@ export default function App() {
         setScreen('value');
       }
     } catch (err) {
-      setError(`Could not reach the appraiser at ${API_URL}. Is the backend running?`);
+      setError(`Could not reach the appraiser at ${base}. Is the backend running?`);
     } finally {
       setLoading(false);
     }
@@ -156,6 +166,7 @@ export default function App() {
             ) : (
               <LinkPanel link={link} onChange={setLink} />
             )}
+            <BackendPanel apiUrl={apiUrl} onChange={setApiUrl} />
             {needsDetails ? (
               <DetailsForm hints={hints} setHints={setHints} onSubmit={() => submit(hints)} />
             ) : null}
@@ -166,11 +177,7 @@ export default function App() {
               disabled={!canSubmit}
               onPress={() => submit(null)}
             />
-            <Text style={styles.footnote}>
-              {API_URL === 'http://localhost:3000'
-                ? 'Backend: localhost:3000 (use adb reverse tcp:3000 tcp:3000)'
-                : `Backend: ${API_URL}`}
-            </Text>
+            <Text style={styles.footnote}>Backend: {normalizeApiUrl(apiUrl)}</Text>
           </ScrollView>
         </KeyboardAvoidingView>
       ) : (
@@ -244,6 +251,25 @@ function LinkPanel({ link, onChange }) {
         autoCorrect={false}
         keyboardType="url"
         placeholder="https://…"
+        placeholderTextColor={COLORS.muted}
+      />
+    </View>
+  );
+}
+
+function BackendPanel({ apiUrl, onChange }) {
+  return (
+    <View style={styles.backend}>
+      <Text style={styles.label}>Backend URL</Text>
+      <TextInput
+        testID="backend-input"
+        style={styles.input}
+        value={apiUrl}
+        onChangeText={onChange}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+        placeholder={DEFAULT_API_URL}
         placeholderTextColor={COLORS.muted}
       />
     </View>
@@ -471,6 +497,7 @@ const styles = StyleSheet.create({
   previewImage: { width: '100%', height: '100%' },
   previewPlaceholder: { color: COLORS.muted },
   row: { flexDirection: 'row', gap: 10 },
+  backend: { marginTop: 14 },
   details: {
     marginTop: 18,
     padding: 16,
