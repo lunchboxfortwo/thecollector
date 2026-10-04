@@ -30,9 +30,6 @@ function identityFromHints(hints) {
     dimensions: hints.size ?? null,
     year: hints.year ?? null,
     country: hints.country ?? null,
-    edition: null,
-    method: 'catalog',
-    match_confidence: hints.artist ? 0.9 : 0.4,
   };
 }
 
@@ -44,21 +41,67 @@ function identityFromVision(v) {
     dimensions: v.dimensions ?? null,
     year: v.year ?? null,
     country: v.country ?? null,
+    provenance: v.provenance ?? null,
     edition: v.edition ?? null,
-    method: 'vision',
     match_confidence: v.match_confidence ?? 0.5,
   };
 }
 
-function needsDetails(basis) {
+// Vision fills what it can; the user's own hints always win on conflict.
+function mergeIdentity(vision, hints) {
+  const merged = { ...(vision || {}) };
+  for (const [key, value] of Object.entries(hints || {})) {
+    if (value != null && value !== '') merged[key] = value;
+  }
+  return {
+    artist: merged.artist ?? null,
+    title: merged.title ?? null,
+    medium: merged.medium ?? null,
+    dimensions: merged.dimensions ?? null,
+    year: merged.year ?? null,
+    country: merged.country ?? null,
+    provenance: merged.provenance ?? null,
+    edition: merged.edition ?? null,
+    method: vision ? 'vision' : 'catalog',
+    match_confidence: vision?.match_confidence ?? (merged.artist ? 0.9 : 0.4),
+  };
+}
+
+function definedIdentity(identity) {
+  const defined = {};
+  for (const [key, value] of Object.entries(identity)) {
+    if (value != null && value !== '') defined[key] = value;
+  }
+  return defined;
+}
+
+// The estimator needs artist, title, medium, dimensions or year; country and
+// provenance alone cannot price a work.
+function hasUsableSignal(identity) {
+  return Boolean(
+    identity.artist || identity.title || identity.medium || identity.dimensions || identity.year,
+  );
+}
+
+function missingFields(identity) {
+  const missing = [];
+  if (!identity.artist) missing.push('artist');
+  if (!identity.year) missing.push('year');
+  if (!identity.country) missing.push('country');
+  if (!identity.dimensions) missing.push('size');
+  if (!identity.medium) missing.push('medium');
+  return missing;
+}
+
+function needsDetails(basis, identity = {}, missing = MISSING_FIELDS) {
   return {
     status: 'needs_details',
-    identity: {},
+    identity: definedIdentity(identity),
     value: null,
     confidence: { level: 'low', coverage: 0, basis },
     provenance: [],
     sources: [],
-    missing_fields: MISSING_FIELDS,
+    missing_fields: missing,
   };
 }
 
@@ -159,29 +202,35 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
       }
     }
 
-    let identity = null;
+    // The identification layer runs first (when a key is configured and an
+    // image was sent); the user's hints then override whatever it found.
+    const hasImage = Boolean(body.imageBase64 || body.imageUrl);
+    let visionIdentity = null;
     let visionNote = null;
-    if (Object.keys(hints).length) {
-      identity = identityFromHints(hints);
-    } else if ((body.imageBase64 || body.imageUrl) && visionEnabled()) {
+    if (hasImage && visionEnabled()) {
+      const described = Object.entries(hints).map(([key, value]) => `${key}: ${value}`);
+      const note = [body.note, described.length ? `User-provided details: ${described.join(', ')}` : null]
+        .filter(Boolean)
+        .join('\n');
       const result = await vision({
         imageBase64: body.imageBase64,
         mimeType: body.mimeType,
         imageUrl: body.imageUrl,
-        note: body.note,
+        note: note || undefined,
       });
-      if (result?.identified) identity = identityFromVision(result);
+      if (result?.identified) visionIdentity = identityFromVision(result);
       else visionNote = result?.reason || 'vision returned no identity';
     }
 
-    if (!identity) {
-      const basis = [
-        visionNote
-          ? `Vision could not identify the work (${visionNote}).`
-          : 'No identity provided; vision is not configured.',
-        'Provide artist, year, country, size and medium to price it from recorded auction sales.',
-      ];
-      return res.json(needsDetails(basis));
+    const identity = mergeIdentity(visionIdentity, identityFromHints(hints));
+
+    if (!hasUsableSignal(identity)) {
+      const basis = [];
+      if (visionNote) basis.push(`Vision could not identify the work (${visionNote}).`);
+      else if (hasImage && !visionEnabled()) basis.push('No vision key configured; the image was not identified.');
+      else if (!hasImage) basis.push('No image supplied; vision was not attempted.');
+      basis.push('Provide what you know and the appraiser will price it from recorded auction sales.');
+      return res.json(needsDetails(basis, identity, missingFields(identity)));
     }
 
     const model = getModel();
@@ -205,7 +254,7 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
         },
         provenance: [],
         sources: [],
-        missing_fields: identity.artist ? [] : MISSING_FIELDS,
+        missing_fields: missingFields(identity),
       });
     }
 
