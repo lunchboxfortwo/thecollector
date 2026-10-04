@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1284" height="2778" viewBox="0 0 1284 2778">
+  <defs>
+    <radialGradient id="bg" cx="0.5" cy="0.38" r="0.7">
+      <stop offset="0" stop-color="#1a1815"/>
+      <stop offset="1" stop-color="#111111"/>
+    </radialGradient>
+    <linearGradient id="brass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0d38a"/>
+      <stop offset="0.5" stop-color="#d7af5f"/>
+      <stop offset="1" stop-color="#a9813a"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1284" height="2778" fill="url(#bg)"/>
+
+  <g transform="translate(642 1120) scale(0.62) translate(-512 -512)">
+    <g fill="none" stroke-linecap="butt" stroke-linejoin="miter">
+      <path d="M300 724 V300 H724" stroke="url(#brass)" stroke-width="58"/>
+      <path d="M356 724 V356 H724" stroke="#f5f1e8" stroke-width="10" opacity="0.5"/>
+    </g>
+    <g transform="rotate(-16 648 664)">
+      <path d="M566 636 C 556 586 588 552 640 548" fill="none" stroke="#f5f1e8" stroke-width="9" opacity="0.75"/>
+      <rect x="520" y="596" width="240" height="150" rx="26" fill="url(#brass)"/>
+      <circle cx="566" cy="671" r="15" fill="#111111"/>
+      <circle cx="566" cy="671" r="15" fill="none" stroke="#f5f1e8" stroke-width="6" opacity="0.65"/>
+      <rect x="612" y="660" width="110" height="16" rx="8" fill="#111111" opacity="0.35"/>
+    </g>
+    <path d="M492 470 l10 26 26 10 -26 10 -10 26 -10 -26 -26 -10 26 -10 z" fill="#f5f1e8" opacity="0.85"/>
+  </g>
+
+  <text x="642" y="1660" text-anchor="middle" font-family="DejaVu Sans, Verdana, Helvetica, Arial, sans-serif"
+        font-size="96" font-weight="700" letter-spacing="16" fill="#f5f1e8">THE COLLECTOR</text>
+
+  <line x1="440" y1="1730" x2="844" y2="1730" stroke="#d7af5f" stroke-width="3" opacity="0.7"/>
+
+  <text x="642" y="1800" text-anchor="middle" font-family="DejaVu Sans, Verdana, Helvetica, Arial, sans-serif"
+        font-size="34" letter-spacing="8" fill="#d7af5f">APPRAISE · VALUE · PROVENANCE</text>
+</svg>

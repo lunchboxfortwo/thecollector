@@ -1,0 +1,26 @@
+# dependencies
+node_modules/
+
+# server database (created by `npm run ingest`)
+server/data/
+
+# expo / react-native build output
+app/.expo/
+app/dist/
+app/web-build/
+app/android/
+app/ios/
+app/*.jks
+app/*.keystore
+
+# logs & env
+*.log
+.env
+.env.local
+
+# build artifacts
+*.apk
+*.aab
+
+# os
+.DS_Store

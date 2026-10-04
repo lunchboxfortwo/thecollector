@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Android adaptive foreground: transparent background, mark kept inside the safe zone. -->
+  <defs>
+    <linearGradient id="brass" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f0d38a"/>
+      <stop offset="0.5" stop-color="#d7af5f"/>
+      <stop offset="1" stop-color="#a9813a"/>
+    </linearGradient>
+  </defs>
+
+  <g transform="translate(512 512) scale(0.66) translate(-512 -512)">
+    <g fill="none" stroke-linecap="butt" stroke-linejoin="miter">
+      <path d="M300 724 V300 H724" stroke="url(#brass)" stroke-width="58"/>
+      <path d="M356 724 V356 H724" stroke="#f5f1e8" stroke-width="10" opacity="0.5"/>
+    </g>
+    <g transform="rotate(-16 648 664)">
+      <path d="M566 636 C 556 586 588 552 640 548" fill="none" stroke="#f5f1e8" stroke-width="9" opacity="0.75"/>
+      <rect x="520" y="596" width="240" height="150" rx="26" fill="url(#brass)"/>
+      <circle cx="566" cy="671" r="15" fill="#111111"/>
+      <circle cx="566" cy="671" r="15" fill="none" stroke="#f5f1e8" stroke-width="6" opacity="0.65"/>
+      <rect x="612" y="660" width="110" height="16" rx="8" fill="#111111" opacity="0.35"/>
+    </g>
+    <path d="M492 470 l10 26 26 10 -26 10 -10 26 -10 -26 -26 -10 26 -10 z" fill="#f5f1e8" opacity="0.85"/>
+  </g>
+</svg>

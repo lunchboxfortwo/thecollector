@@ -1,0 +1,14 @@
+{
+  "name": "thecollector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The Collector — art & collectible appraisal backend plus Expo app",
+  "scripts": {
+    "postinstall": "npm --prefix server install",
+    "server": "npm --prefix server start",
+    "ingest": "npm --prefix server run ingest",
+    "test": "npm --prefix server test",
+    "app": "npm --prefix app start",
+    "app:android": "npm --prefix app run android"
+  }
+}
