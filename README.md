@@ -91,7 +91,7 @@ Result (`status` is `priced`, `needs_details`, or `refused`):
   the ingested database.
 
 On this machine's ingest (21,970 realized sales, 7 artists) the held-out coverage was
-**50.5% / 80.4% / 90.4%** at nominal 50/80/90, with a 80% band of ≈ ×5.4 either side.
+**51.3% / 80.4% / 90.4%** at nominal 50/80/90, with a 80% band of ≈ ×5.4 either side.
 
 ### Optional vision
 
