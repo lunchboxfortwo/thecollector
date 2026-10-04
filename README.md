@@ -37,6 +37,20 @@ npm start          # http://localhost:3000
 the resulting row count. Requests are sequential and pages are retried; a failing artist keeps
 whatever was already fetched.
 
+`npm run ingest:all` ingests every artist that has auction results, not just the seven defaults;
+it is the same command as `node src/ingest.js --all`. It pages through the Artsy artist catalog
+by `SORTABLE_ID_ASC`, queues each artist whose `counts.auctionResults` is non-zero, then fetches
+that artist's realized sales with no per-artist page cap (the quick mode still caps at 40 pages,
+and warns if it has to stop while more results remain). Progress is checkpointed in the same
+SQLite file under `server/data/` (`ingest_state` holds the catalog cursor; `ingest_artists` is the
+queue of queued/done/failed artists), so an interrupted run resumes where it stopped and skips
+artists already done; rows are written per artist and de-duplicated by `(artist_slug,
+internal_id)`, so re-running is safe. A discovery page that fails after its retries ends the run
+cleanly for a later resume; a failing artist is logged and does not abort the run, and artists
+that failed are retried on the next run. Around 54,000 of the catalog's ≈318,000 artists carry
+results, so a complete first pass is a long background job (roughly tens of hours); run it in
+chunks, since each `--all` invocation resumes. The default `npm run ingest` is unchanged.
+
 ### `POST /appraise`
 
 Request:
