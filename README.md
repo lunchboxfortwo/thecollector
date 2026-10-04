@@ -9,7 +9,7 @@ This repository is a two-part monorepo:
 ```
 thecollector/
   server/   Node 20+ ESM · Express · better-sqlite3   (synchronous, no queues)
-  app/      Expo (React Native) · two screens          (Input, Value)
+  app/      Expo (React Native) · landing + reader chat
 ```
 
 Non-goals: no app-store / Play upload, no BullMQ / Redis / Caddy / Docker, no licensed data
@@ -109,8 +109,9 @@ cd server && npm test      # node --test, valuation + API
 
 ## App (Expo)
 
-Two screens, no navigation library: **Input** and **Value**. There is no Discover or Saved tab and
-no default note box; the five extra fields only appear after an unidentified request.
+One vertical, two-page flow with no navigation library: the **landing** and the **reader**. There
+is no Discover or Saved tab and no default note box; the five extra fields are chat prompt chips
+that appear only after an unidentified request.
 
 ```bash
 cd app
@@ -118,16 +119,19 @@ npm install
 npx expo start
 ```
 
-- The app talks to the **Backend URL** field on the Input screen. It defaults to
-  `EXPO_PUBLIC_API_URL` when the bundle is built, else `http://172.93.111.86:3000` (this box on its
-  LAN). Edit the field in-app to point anywhere — e.g. `http://100.97.62.62:3000` (this box's
+- The app talks to the **Backend URL** field, opened from the API pill on the landing. It defaults
+  to `EXPO_PUBLIC_API_URL` when the bundle is built, else `http://172.93.111.86:3000` (this box on
+  its LAN). Edit the field in-app to point anywhere — e.g. `http://100.97.62.62:3000` (this box's
   Tailscale address, reachable from a phone on cellular) or `http://localhost:3000` for a tunnel.
 - The server listens on all interfaces (`0.0.0.0:3000`), so the same backend answers on localhost,
   the LAN address and the Tailscale address.
-- Input: `Photo | Link` toggle; Photo uses `expo-image-picker` (camera + library); Link is a URL
-  field; one primary **Appraise** button. Loading and backend-unreachable states are shown.
-- Value: large value range, confidence level + coverage, `Why this value`, `Identified` fields,
-  `Similar items`, and a back button.
+- Landing: three edge-to-edge panels — Link top-left, Album top-right, Camera the bottom half.
+  Link expands a URL field while album and camera stay reachable; Album and Camera use
+  `expo-image-picker`. Choosing a source moves down into the reader, not sideways.
+- Reader: the chosen photo fills the screen and a bottom sheet two thirds high holds the chat.
+  Sending calls `POST /appraise` and renders the result in the chat: identification, the value
+  range with confidence, basis and as-of, provenance, and similar sales; an unidentified piece
+  asks for artist, year, country, size and medium as chips with a free-text answer.
 
 ### Emulator runbook (this machine)
 
