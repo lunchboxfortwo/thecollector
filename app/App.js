@@ -35,24 +35,66 @@ const MONO = Platform.select({ ios: 'Menlo', android: 'monospace', default: 'mon
 const TOP_INSET = Platform.OS === 'android' ? NativeStatusBar.currentHeight || 24 : 44;
 const BOTTOM_INSET = Platform.OS === 'android' ? 12 : 24;
 
-// Pastel postmodern palette. The landing uses the saturated fields; the reader
-// and chat use the pastel fields with ink outlines and hard offset shadows.
-const COLORS = {
-  ink: '#14110f',
-  line: '#1a1512',
-  paper: '#fffdf7',
-  mint: '#cfe8d5',
-  blush: '#f3d3d2',
-  butter: '#f5e6b8',
-  lilac: '#ded4f2',
-  sky: '#d3e3f5',
-  berry: '#8f2433',
-  brass: '#d7af5f',
-  cobalt: '#2b4bd6',
-  vermilion: '#e2482f',
-  chartreuse: '#c7e04a',
-  teal: '#7fd0c7',
+// The exact-build token set, mirroring the audited v3 mock's own markup. The
+// colors are the mock's CSS literals and the sizes, outline weights and offset
+// shadows are its values, so the build is checkable against the mock rather
+// than eyeballed. See `collector-input-chat-mock-v3.html`.
+const THEME = {
+  color: {
+    ink: '#14110f',
+    line: '#1a1512',
+    paper: '#fffdf7',
+    mint: '#cfe8d5',
+    blush: '#f3d3d2',
+    butter: '#f5e6b8',
+    lilac: '#ded4f2',
+    sky: '#d3e3f5',
+    berry: '#8f2433',
+    brass: '#d7af5f',
+    cobalt: '#2b4bd6',
+    vermilion: '#e2482f',
+    chartreuse: '#c7e04a',
+    ochre: '#c98a2b',
+    teal: '#7fd0c7',
+    cream: '#fff4d6',
+    body: '#241d17',
+    bodySoft: '#3a332c',
+    caption: '#584f45',
+    placeholder: '#5f574c',
+    priceLabel: '#5c4a18',
+    headInk: '#4a4136',
+  },
+  outline: { thin: 2, sheet: 4, focus: 3 },
+  radius: { square: 0, pill: 999 },
+  shadow: {
+    card: { dx: 4, dy: 4, color: '#f5e6b8' },
+    price: { dx: 6, dy: 6, color: '#ded4f2' },
+    chip: { dx: 3, dy: 3, color: '#d3e3f5' },
+    composer: { dx: 4, dy: 4, color: '#d3e3f5' },
+    sheet: { dx: 8, dy: -8, color: '#f3d3d2' },
+    modal: { dx: 6, dy: 6, color: '#f5e6b8' },
+  },
+  size: {
+    hairline: 2,
+    sheetTop: 4,
+    send: 40,
+    hit: 44,
+    chipMin: 44,
+    shutter: 92,
+    shutterSmall: 64,
+    grabW: 46,
+    grabH: 5,
+    sheetHeight: '66.5%',
+  },
+  font: { serif: SERIF, mono: MONO },
 };
+const COLORS = THEME.color;
+
+// The v3 mock's camera panel is a 160deg ochre-to-vermilion gradient and its
+// photo wash is a three-stop translucent gradient. Both are baked to small
+// stretch images so the panel colors match exactly with no native module.
+const CAMERA_GRADIENT = require('./assets/camera-gradient.png');
+const PHOTO_WASH = require('./assets/photo-wash.png');
 
 const HINT_FIELDS = [
   { key: 'artist', label: 'Artist' },
@@ -99,14 +141,17 @@ function SendGlyph({ color = COLORS.butter, size = 1 }) {
 
 // Front surface plus a hard offset shadow in a second pastel, drawn as a back
 // layer so it renders the same on Android and iOS.
-function Hard({ color, dx = 4, dy = 4, front, style, children }) {
+function Hard({ shadow = THEME.shadow.card, front, style, children }) {
   return (
     <View style={[styles.hardOuter, style]}>
       <View
         pointerEvents="none"
         style={[
           StyleSheet.absoluteFill,
-          { backgroundColor: color, transform: [{ translateX: dx }, { translateY: dy }] },
+          {
+            backgroundColor: shadow.color,
+            transform: [{ translateX: shadow.dx }, { translateY: shadow.dy }],
+          },
         ]}
       />
       <View style={front}>{children}</View>
@@ -384,12 +429,15 @@ function Landing({
               <Text style={styles.linkSwitch}>switch to album · camera</Text>
             </Pressable>
           </View>
-          <Pressable testID="panel-camera" style={[styles.tile, styles.tileCam]} onPress={onCapture}>
-            <View style={styles.tileCol}>
-              <Text style={styles.kick}>03 / CAMERA</Text>
-              <Text style={styles.tileTitle}>Take a photo</Text>
+          <Pressable testID="panel-camera" style={styles.camPanel} onPress={onCapture}>
+            <Image source={CAMERA_GRADIENT} style={styles.fillImage} resizeMode="stretch" />
+            <View style={styles.tileCamRowEntry}>
+              <View style={styles.tileCol}>
+                <Text style={styles.kick}>03 / CAMERA</Text>
+                <Text style={styles.tileTitle}>Take a photo</Text>
+              </View>
+              <View style={[styles.shutter, styles.shutterSmall]} />
             </View>
-            <View style={[styles.shutter, styles.shutterSmall]} />
           </Pressable>
         </View>
       ) : (
@@ -416,14 +464,17 @@ function Landing({
               <Text style={styles.tileNote}>screenshot or saved photo</Text>
             </Pressable>
           </View>
-          <Pressable testID="panel-camera" style={[styles.tile, styles.tileCam]} onPress={onCapture}>
+          <Pressable testID="panel-camera" style={styles.camPanel} onPress={onCapture}>
+            <Image source={CAMERA_GRADIENT} style={styles.fillImage} resizeMode="stretch" />
             <View style={styles.slash} />
-            <View style={styles.tileCol}>
-              <Text style={styles.kick}>03 / CAMERA</Text>
-              <Text style={styles.tileTitle}>Take a photo</Text>
-              <Text style={styles.tileNote}>point, shoot, read</Text>
+            <View style={styles.tileCamRow}>
+              <View style={styles.tileCol}>
+                <Text style={styles.kick}>03 / CAMERA</Text>
+                <Text style={styles.tileTitle}>Take a photo</Text>
+                <Text style={styles.tileNote}>point, shoot, read</Text>
+              </View>
+              <View style={styles.shutter} />
             </View>
-            <View style={styles.shutter} />
           </Pressable>
         </View>
       )}
@@ -493,7 +544,7 @@ function Reader({
           </Text>
         </View>
       )}
-      <View pointerEvents="none" style={styles.photoWash} />
+      <Image source={PHOTO_WASH} style={styles.photoWash} resizeMode="stretch" />
 
       <View style={styles.statusRow}>
         <Pressable testID="back-to-sources" onPress={onBack} style={styles.backPress} hitSlop={10}>
@@ -507,9 +558,7 @@ function Reader({
       </View>
 
       <Hard
-        color={COLORS.blush}
-        dx={8}
-        dy={-8}
+        shadow={THEME.shadow.sheet}
         style={styles.sheetOuter}
         front={styles.sheetFront}
       >
@@ -530,9 +579,7 @@ function Reader({
           {turns.map((turn) => (
             <Hard
               key={turn.id}
-              color={COLORS.butter}
-              dx={4}
-              dy={4}
+              shadow={THEME.shadow.card}
               style={[styles.turnOuter]}
               front={styles.userBubble}
             >
@@ -544,7 +591,7 @@ function Reader({
           {loading ? (
             <>
               <Text style={styles.sys}>reading the piece</Text>
-              <Hard color={COLORS.butter} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+              <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
                 <ActivityIndicator color={COLORS.berry} />
                 <Text style={styles.bubbleText}>Reading the image…</Text>
               </Hard>
@@ -552,14 +599,14 @@ function Reader({
           ) : error ? (
             <>
               <Text style={styles.sys}>trouble</Text>
-              <Hard color={COLORS.butter} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+              <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
                 <Text style={styles.bubbleText}>{error}</Text>
               </Hard>
             </>
           ) : !result ? (
             <>
               <Text style={styles.sys}>ready</Text>
-              <Hard color={COLORS.butter} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+              <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
                 <Text style={styles.bubbleText}>
                   Pick a photo or paste a link, and the piece is read and priced here.
                 </Text>
@@ -570,7 +617,7 @@ function Reader({
               <Text style={styles.sys}>what I can see</Text>
               <IdentityBubble identity={result.identity} />
               <PriceCard result={result} />
-              {origin ? <TextCard label="where it came from" color={COLORS.lilac} body={origin} /> : null}
+              {origin ? <TextCard label="where it came from" body={origin} /> : null}
               {provenance.length || sources.length ? (
                 <ProvenanceCard provenance={provenance} sources={sources} />
               ) : null}
@@ -579,7 +626,7 @@ function Reader({
           ) : result.status === 'needs_details' ? (
             <>
               <Text style={styles.sys}>what I need</Text>
-              <Hard color={COLORS.butter} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+              <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
                 <Text style={styles.bubbleText}>
                   I can&apos;t place this one. Tell me anything you know and I&apos;ll price it from
                   recorded auction sales.
@@ -595,7 +642,7 @@ function Reader({
           ) : (
             <>
               <Text style={styles.sys}>what I can&apos;t do</Text>
-              <Hard color={COLORS.butter} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+              <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
                 <Text style={styles.bubbleText}>
                   {(result.confidence?.basis || ['I could not price this piece.']).join(' ')}
                 </Text>
@@ -612,9 +659,7 @@ function Reader({
               return (
                 <Hard
                   key={key}
-                  color={COLORS.sky}
-                  dx={3}
-                  dy={3}
+                  shadow={THEME.shadow.chip}
                   style={styles.chipOuter}
                   front={[styles.chipFront, filled && styles.chipFrontFilled, active && styles.chipFrontActive]}
                 >
@@ -633,9 +678,7 @@ function Reader({
         ) : null}
 
         <Hard
-          color={COLORS.sky}
-          dx={4}
-          dy={4}
+          shadow={THEME.shadow.composer}
           style={styles.composerOuter}
           front={[styles.composerFront, composerFocus && styles.focusRing]}
         >
@@ -671,7 +714,7 @@ function Reader({
 function IdentityBubble({ identity }) {
   if (!identity?.artist && !identity?.title) {
     return (
-      <Hard color={COLORS.butter} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+      <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
         <Text style={styles.bubbleText}>
           The piece could not be named, but it can still be priced.
         </Text>
@@ -682,7 +725,7 @@ function IdentityBubble({ identity }) {
     .filter(Boolean)
     .join(' · ');
   return (
-    <Hard color={COLORS.butter} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+    <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
       <Text style={styles.identityTitle}>
         {identity.artist || 'Unknown artist'}
         {identity.title ? ` — ${identity.title}` : ''}
@@ -695,7 +738,7 @@ function IdentityBubble({ identity }) {
 function PriceCard({ result }) {
   const { value, confidence } = result;
   return (
-    <Hard color={COLORS.lilac} dx={6} dy={6} style={styles.priceOuter} front={styles.priceFront}>
+    <Hard shadow={THEME.shadow.price} style={styles.priceOuter} front={styles.priceFront}>
       <Text style={styles.priceLabel}>PROJECTED VALUE</Text>
       <Text testID="value-range" style={styles.priceValue}>
         {formatMoney(value.low, value.currency)} – {formatMoney(value.high, value.currency)}
@@ -714,11 +757,11 @@ function PriceCard({ result }) {
   );
 }
 
-function TextCard({ label, color, body }) {
+function TextCard({ label, body }) {
   return (
     <>
       <Text style={styles.sys}>{label}</Text>
-      <Hard color={color} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+      <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
         <Text style={styles.cardLine}>{body}</Text>
       </Hard>
     </>
@@ -729,7 +772,7 @@ function ProvenanceCard({ provenance, sources }) {
   return (
     <>
       <Text style={styles.sys}>from the record</Text>
-      <Hard color={COLORS.butter} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+      <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
         {provenance.map((entry, index) => (
           <Text key={index} style={styles.cardLine}>
             {[entry.artist, entry.title].filter(Boolean).join(' — ') || entry.ref || entry.source}
@@ -753,7 +796,7 @@ function SimilarCard({ items }) {
   return (
     <>
       <Text style={styles.sys}>similar sales</Text>
-      <Hard color={COLORS.lilac} dx={4} dy={4} style={styles.bubbleOuter} front={styles.bubbleFront}>
+      <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
         {items.map((item, index) => (
           <View key={index} style={styles.similarRow}>
             <Text style={[styles.cardLine, styles.similarName]}>
@@ -773,7 +816,7 @@ function BackendModal({ visible, apiUrl, onChange, onClose }) {
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <View style={styles.modalBackdrop}>
-        <Hard color={COLORS.butter} dx={6} dy={6} style={styles.modalOuter} front={styles.modalCard}>
+        <Hard shadow={THEME.shadow.modal} style={styles.modalOuter} front={styles.modalCard}>
           <Text style={styles.modalTitle}>BACKEND URL</Text>
           <Text style={styles.modalBody}>The appraiser endpoint this build talks to.</Text>
           <TextInput
@@ -871,15 +914,29 @@ const styles = StyleSheet.create({
     borderBottomWidth: 2,
     borderColor: COLORS.ink,
   },
-  tileCam: {
+  camPanel: {
     flex: 1,
-    backgroundColor: COLORS.vermilion,
+    backgroundColor: COLORS.ochre,
+    overflow: 'hidden',
+  },
+  tileCamRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 22,
+  },
+  // The link-entry camera uses the mock's `.le-cam` padding.
+  tileCamRowEntry: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'flex-end',
     justifyContent: 'space-between',
     paddingHorizontal: 22,
     paddingVertical: 24,
   },
+  fillImage: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
   tileCol: { flex: 1, justifyContent: 'flex-end' },
   kick: {
     fontFamily: MONO,
@@ -922,14 +979,18 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '-24deg' }],
   },
   shutter: {
-    width: 92,
-    height: 92,
-    borderRadius: 46,
+    width: THEME.size.shutter,
+    height: THEME.size.shutter,
+    borderRadius: THEME.size.shutter / 2,
     borderWidth: 3,
     borderColor: COLORS.ink,
     backgroundColor: COLORS.brass,
   },
-  shutterSmall: { width: 64, height: 64, borderRadius: 32 },
+  shutterSmall: {
+    width: THEME.size.shutterSmall,
+    height: THEME.size.shutterSmall,
+    borderRadius: THEME.size.shutterSmall / 2,
+  },
   scrollCue: {
     position: 'absolute',
     bottom: BOTTOM_INSET,
@@ -992,14 +1053,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   photoFallbackText: { color: COLORS.ink, fontFamily: MONO, letterSpacing: 3, fontSize: 12 },
-  photoWash: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: '42%',
-    backgroundColor: 'rgba(222,212,242,0.22)',
-  },
+  // The mock's `.photowash` covers the whole photo with a three-stop gradient.
+  photoWash: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
   statusRow: {
     position: 'absolute',
     top: TOP_INSET + 10,
@@ -1037,26 +1092,48 @@ const styles = StyleSheet.create({
     letterSpacing: 1.2,
     textTransform: 'uppercase',
   },
-  sheetOuter: { position: 'absolute', left: 0, right: 0, bottom: 0, height: '66.5%' },
+  sheetOuter: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    height: THEME.size.sheetHeight,
+  },
   sheetFront: {
     flex: 1,
     backgroundColor: COLORS.mint,
-    borderTopWidth: 4,
+    borderTopWidth: THEME.size.sheetTop,
     borderColor: COLORS.line,
+    borderTopLeftRadius: THEME.radius.square,
+    borderTopRightRadius: THEME.radius.square,
     overflow: 'hidden',
+    // The mock's second, soft shadow under the hard blush offset.
+    elevation: 16,
+    shadowColor: '#000',
+    shadowOpacity: 0.35,
+    shadowRadius: 20,
+    shadowOffset: { width: 0, height: -16 },
   },
-  grab: { width: 46, height: 5, backgroundColor: COLORS.line, alignSelf: 'center', marginTop: 11, marginBottom: 5 },
+  grab: {
+    width: THEME.size.grabW,
+    height: THEME.size.grabH,
+    backgroundColor: COLORS.line,
+    alignSelf: 'center',
+    marginTop: 11,
+    marginBottom: 5,
+  },
   sheetHead: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 18,
+    paddingTop: 4,
     paddingBottom: 10,
-    borderBottomWidth: 2,
+    borderBottomWidth: THEME.outline.thin,
     borderBottomColor: COLORS.line,
   },
   sheetHeadText: {
-    color: '#4a4136',
+    color: COLORS.headInk,
     fontFamily: MONO,
     fontSize: 10,
     letterSpacing: 1.6,
@@ -1080,9 +1157,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 11,
   },
-  bubbleText: { color: '#241d17', fontSize: 13.5, lineHeight: 20 },
-  identityTitle: { fontFamily: SERIF, fontSize: 16, color: '#241d17', marginBottom: 4 },
-  identityMeta: { color: '#584f45', fontFamily: MONO, fontSize: 11.5 },
+  bubbleText: { color: COLORS.body, fontSize: 13.5, lineHeight: 20 },
+  identityTitle: { fontFamily: SERIF, fontSize: 16, color: COLORS.body, marginBottom: 4 },
+  identityMeta: { color: COLORS.caption, fontFamily: MONO, fontSize: 11.5 },
   priceOuter: { marginBottom: 16, maxWidth: '94%' },
   priceFront: {
     backgroundColor: COLORS.butter,
@@ -1092,20 +1169,20 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   priceLabel: {
-    color: '#5c4a18',
+    color: COLORS.priceLabel,
     fontFamily: MONO,
     fontSize: 10,
     letterSpacing: 2,
     textTransform: 'uppercase',
   },
-  priceValue: { color: '#241d17', fontSize: 26, fontWeight: '800', marginTop: 6, marginBottom: 3 },
+  priceValue: { color: COLORS.body, fontSize: 26, fontWeight: '800', marginTop: 6, marginBottom: 3 },
   priceMeta: { color: COLORS.berry, fontFamily: MONO, fontSize: 11, marginBottom: 10 },
   whyRow: { flexDirection: 'row', marginBottom: 6 },
   whyDot: { color: COLORS.berry, marginRight: 8, fontSize: 12 },
-  whyText: { color: '#3a332c', fontSize: 11.8, lineHeight: 18, flex: 1 },
-  basisText: { color: '#3a332c', fontSize: 12, lineHeight: 18, flex: 1 },
-  cardLine: { color: '#241d17', fontSize: 12.5, lineHeight: 18, marginBottom: 5 },
-  cardFoot: { color: '#584f45', fontFamily: MONO, fontSize: 10.5, marginTop: 3 },
+  whyText: { color: COLORS.bodySoft, fontSize: 11.8, lineHeight: 18, flex: 1 },
+  basisText: { color: COLORS.bodySoft, fontSize: 12, lineHeight: 18, flex: 1 },
+  cardLine: { color: COLORS.body, fontSize: 12.5, lineHeight: 18, marginBottom: 5 },
+  cardFoot: { color: COLORS.caption, fontFamily: MONO, fontSize: 10.5, marginTop: 3 },
   similarRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   similarName: { flex: 1, marginRight: 10 },
   similarPrice: { color: COLORS.berry, fontFamily: MONO, fontSize: 11.5 },
@@ -1125,15 +1202,15 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     marginBottom: 3,
   },
-  userText: { color: '#241d17', fontSize: 13 },
+  userText: { color: COLORS.body, fontSize: 13 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', paddingHorizontal: 14, paddingBottom: 2 },
   chipOuter: { marginRight: 8, marginBottom: 8 },
   chipFront: { backgroundColor: COLORS.paper, borderWidth: 2, borderColor: COLORS.line },
   chipFrontFilled: { backgroundColor: COLORS.butter },
   chipFrontActive: { backgroundColor: COLORS.sky },
   chipPress: {
-    minHeight: 44,
-    minWidth: 44,
+    minHeight: THEME.size.chipMin,
+    minWidth: THEME.size.chipMin,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 15,
@@ -1154,8 +1231,8 @@ const styles = StyleSheet.create({
   send: {
     flexGrow: 0,
     flexShrink: 0,
-    width: 40,
-    height: 40,
+    width: THEME.size.send,
+    height: THEME.size.send,
     backgroundColor: COLORS.line,
     alignItems: 'center',
     justifyContent: 'center',
@@ -1184,7 +1261,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     marginBottom: 6,
   },
-  modalBody: { color: '#584f45', fontSize: 12.5, marginBottom: 14, lineHeight: 18 },
+  modalBody: { color: COLORS.caption, fontSize: 12.5, marginBottom: 14, lineHeight: 18 },
   modalInput: {
     backgroundColor: COLORS.mint,
     borderWidth: 2,
@@ -1196,7 +1273,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   modalDone: {
-    minHeight: 44,
+    minHeight: THEME.size.hit,
     backgroundColor: COLORS.line,
     alignItems: 'center',
     justifyContent: 'center',
