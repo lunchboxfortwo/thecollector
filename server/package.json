@@ -1,0 +1,20 @@
+{
+  "name": "thecollector-server",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "The Collector appraisal backend (Express + better-sqlite3)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "ingest": "node src/ingest.js",
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^5.2.1"
+  }
+}
