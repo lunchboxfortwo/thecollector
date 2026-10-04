@@ -180,3 +180,97 @@ test('malformed bodies return 400', async () => {
     db.close();
   }
 });
+
+const CACHE_HINTS = {
+  // No title: the estimate uses the pooled hedonic model, whose basis line
+  // reports the trained row count.
+  hints: {
+    artist: 'andy-warhol',
+    size: '100 x 100 cm',
+    medium: 'print',
+    year: '1968',
+    country: 'USA',
+  },
+};
+
+function growTable(db) {
+  const rows = [];
+  for (let i = 100; i < 120; i++) {
+    rows.push(
+      makeSale({
+        artist: 'andy-warhol',
+        title: 'Soup',
+        price: 5000,
+        area: 900,
+        medium: 'print',
+        year: 1970,
+        id: i,
+      }),
+    );
+  }
+  insertSales(db, rows);
+}
+
+function hedonicBasis(json) {
+  return json.confidence.basis.find((b) => b.startsWith('Hedonic'));
+}
+
+async function cacheApp(db, rebuildMinutes) {
+  process.env.MODEL_REBUILD_MINUTES = rebuildMinutes;
+  try {
+    const app = createApp({ db, visionEnabled: () => false });
+    const server = await startApp(app);
+    return { server, base: `http://127.0.0.1:${server.address().port}` };
+  } finally {
+    delete process.env.MODEL_REBUILD_MINUTES;
+  }
+}
+
+test('model is served from cache while the table grows, within the throttle window', async () => {
+  const db = seededDb();
+  const { server, base } = await cacheApp(db, '60');
+  try {
+    const before = await postJson(base, '/appraise', CACHE_HINTS);
+    assert.equal(before.json.status, 'priced');
+    const basisBefore = hedonicBasis(before.json);
+
+    growTable(db);
+
+    // Window has not elapsed: the request must be served from the cached
+    // model even though the table now has 20 more rows.
+    const stale = await postJson(base, '/appraise', CACHE_HINTS);
+    assert.equal(stale.json.status, 'priced');
+    assert.equal(hedonicBasis(stale.json), basisBefore);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('model refreshes after the throttle window elapses', async () => {
+  const db = seededDb();
+  const { server, base } = await cacheApp(db, '0');
+  try {
+    const before = await postJson(base, '/appraise', CACHE_HINTS);
+    assert.equal(before.json.status, 'priced');
+    const basisBefore = hedonicBasis(before.json);
+
+    growTable(db);
+
+    // Window is zero: a request triggers a background rebuild; once it
+    // finishes, the new rows are reflected in responses.
+    let refreshed = null;
+    for (let i = 0; i < 50 && !refreshed; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      const res = await postJson(base, '/appraise', CACHE_HINTS);
+      if (hedonicBasis(res.json) && hedonicBasis(res.json) !== basisBefore) refreshed = res.json;
+    }
+    assert.ok(refreshed, 'expected the model to refresh after the throttle window');
+    assert.equal(refreshed.status, 'priced');
+    assert.equal(refreshed.value.currency, 'USD');
+    assert.ok(hedonicBasis(refreshed).includes('80 recorded auction sales'));
+  } finally {
+    server.close();
+    db.close();
+  }
+});
