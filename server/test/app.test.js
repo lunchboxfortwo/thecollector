@@ -157,6 +157,118 @@ test('empty database refuses rather than inventing a value', async () => {
   }
 });
 
+test('vision fills identity alongside a partial hint and the user hint wins', async () => {
+  const db = seededDb();
+  const calls = [];
+  const vision = async (args) => {
+    calls.push(args);
+    return {
+      identified: true,
+      method: 'vision',
+      artist: 'andy-warhol',
+      title: "Campbell's Soup",
+      medium: 'print',
+      dimensions: '100 x 100 cm',
+      year: '1968',
+      country: 'Japan',
+      provenance: 'Private collection, Tokyo.',
+      match_confidence: 0.88,
+    };
+  };
+  const app = createApp({ db, vision, visionEnabled: () => true });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { json } = await postJson(base, '/appraise', {
+      imageBase64: 'AAAA',
+      mimeType: 'image/jpeg',
+      note: 'estate sale',
+      hints: { country: 'USA' },
+    });
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].note, /User-provided details: country: USA/);
+    assert.equal(json.status, 'priced');
+    assert.equal(json.identity.artist, 'andy-warhol');
+    assert.equal(json.identity.method, 'vision');
+    assert.equal(json.identity.country, 'USA'); // the hint beats the model's country
+    assert.equal(json.identity.dimensions, '100 x 100 cm');
+    assert.equal(json.identity.provenance, 'Private collection, Tokyo.');
+    assert.equal(json.identity.match_confidence, 0.88);
+    assert.equal(typeof json.value.low, 'number');
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('a partial vision result asks only for the fields it could not fill', async () => {
+  const db = seededDb();
+  const app = createApp({
+    db,
+    vision: async () => ({ identified: true, method: 'vision', country: 'Japan', match_confidence: 0.5 }),
+    visionEnabled: () => true,
+  });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { json } = await postJson(base, '/appraise', {
+      imageBase64: 'AAAA',
+      mimeType: 'image/jpeg',
+    });
+    assert.equal(json.status, 'needs_details');
+    assert.deepEqual(json.missing_fields, ['artist', 'year', 'size', 'medium']);
+    assert.equal(json.identity.country, 'Japan');
+    assert.equal(json.value, null);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('a provider failure falls back to needs_details and names the failure', async () => {
+  const db = seededDb();
+  const app = createApp({
+    db,
+    vision: async () => ({ identified: false, reason: 'vision HTTP 503' }),
+    visionEnabled: () => true,
+  });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { json } = await postJson(base, '/appraise', {
+      imageBase64: 'AAAA',
+      mimeType: 'image/jpeg',
+    });
+    assert.equal(json.status, 'needs_details');
+    assert.deepEqual(json.missing_fields, ['artist', 'year', 'country', 'size', 'medium']);
+    assert.ok(json.confidence.basis.some((line) => line.includes('vision HTTP 503')));
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('with no vision key an image still prices from the user hints', async () => {
+  const db = seededDb();
+  const app = createApp({ db, visionEnabled: () => false });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { json } = await postJson(base, '/appraise', {
+      imageBase64: 'AAAA',
+      mimeType: 'image/jpeg',
+      hints: { artist: 'andy-warhol', title: "Campbell's Soup", size: '100 x 100 cm', medium: 'print', year: '1968' },
+    });
+    assert.equal(json.status, 'priced');
+    assert.equal(json.identity.artist, 'andy-warhol');
+    assert.equal(json.identity.method, 'catalog');
+    assert.equal(typeof json.value.low, 'number');
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
 test('malformed bodies return 400', async () => {
   const db = seededDb();
   const app = createApp({ db, visionEnabled: () => false });

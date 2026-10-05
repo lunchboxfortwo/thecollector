@@ -74,7 +74,7 @@ Result (`status` is `priced`, `needs_details`, or `refused`):
 {
   "status": "priced",
   "identity": { "artist": "…", "title": "…", "medium": "…", "dimensions": "…",
-                 "year": "…", "country": "…", "edition": null,
+                 "year": "…", "country": "…", "provenance": "…", "edition": null,
                  "method": "catalog|vision", "match_confidence": 0.9 },
   "value": { "low": 30000, "high": 890000, "currency": "USD", "as_of": "2026-10-04" },
   "confidence": { "level": "medium", "coverage": 0.8, "basis": ["…"] },
@@ -84,10 +84,14 @@ Result (`status` is `priced`, `needs_details`, or `refused`):
 }
 ```
 
-- No identity and no vision key → `needs_details` with
-  `missing_fields: ["artist","year","country","size","medium"]`.
-- Resubmitting those as `hints` → `priced` (or `refused`), with a numeric `low`/`high` and a
-  stated `coverage`.
+- An image plus a configured vision key → the identification layer runs first and fills artist,
+  title, medium, dimensions, year, country and a short provenance. Any `hints` the user supplied
+  win on conflict.
+- `needs_details` only after identification fails, and `missing_fields` lists only what is still
+  missing — a partial result asks for the rest, e.g. `["artist","year","size","medium"]` when
+  only the country was found.
+- Any usable signal (artist, title, medium, dimensions or year) is priced with, so a photo the
+  vision model can identify never forces the user to retype fields they do not have.
 - Empty comps database → `refused`; the server never invents a value.
 
 ### Estimator and calibration
@@ -110,8 +114,11 @@ On this machine's ingest (21,970 realized sales, 7 artists) the held-out coverag
 ### Optional vision
 
 Set `OPENROUTER_API_KEY` (or `VISION_API_KEY`) and `/appraise` will ask a multimodal model to
-identify the work before pricing. Unset, the request still succeeds and returns `needs_details`.
-Overridable: `VISION_MODEL`, `VISION_API_URL`, `VISION_TIMEOUT_MS`.
+identify the work before pricing, returning `country` (origin) and a one-sentence `provenance`
+alongside the catalogue fields. The model is consulted whenever an image is sent and a key is
+set, even with hints, and the user's own hints always override its answer. Unset, the request
+still succeeds and returns `needs_details`. `VISION_MODEL` defaults to
+`google/gemini-3.5-flash`; `VISION_API_URL` and `VISION_TIMEOUT_MS` are also overridable.
 
 ### Tests
 
@@ -140,8 +147,9 @@ npx expo start
   the LAN address and the Tailscale address.
 - Input: `Photo | Link` toggle; Photo uses `expo-image-picker` (camera + library); Link is a URL
   field; one primary **Appraise** button. Loading and backend-unreachable states are shown.
-- Value: large value range, confidence level + coverage, `Why this value`, `Identified` fields,
-  `Similar items`, and a back button.
+- Value: large value range, confidence level + coverage, `Why this value`, `Identified` fields
+  (country shown as `Origin`), a `Provenance` note when the identifier returned one, `Similar
+  items`, and a back button.
 
 ### Emulator runbook (this machine)
 

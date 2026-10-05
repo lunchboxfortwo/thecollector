@@ -133,6 +133,16 @@ export default function App() {
       const json = await res.json();
       setResult(json);
       if (json.status === 'needs_details') {
+        // Keep whatever the identifier already filled and only ask for the rest.
+        const identified = json.identity || {};
+        setHints((prev) => ({
+          ...prev,
+          artist: prev.artist || identified.artist || '',
+          year: prev.year || identified.year || '',
+          country: prev.country || identified.country || '',
+          size: prev.size || identified.dimensions || '',
+          medium: prev.medium || identified.medium || '',
+        }));
         setScreen('input');
       } else {
         setScreen('value');
@@ -168,7 +178,12 @@ export default function App() {
             )}
             <BackendPanel apiUrl={apiUrl} onChange={setApiUrl} />
             {needsDetails ? (
-              <DetailsForm hints={hints} setHints={setHints} onSubmit={() => submit(hints)} />
+              <DetailsForm
+                hints={hints}
+                setHints={setHints}
+                missingFields={result.missing_fields}
+                onSubmit={() => submit(hints)}
+              />
             ) : null}
             {error ? <Text style={styles.error}>{error}</Text> : null}
             <PrimaryButton
@@ -276,20 +291,24 @@ function BackendPanel({ apiUrl, onChange }) {
   );
 }
 
-function DetailsForm({ hints, setHints, onSubmit }) {
-  const fields = [
-    { key: 'artist', label: 'Artist' },
-    { key: 'year', label: 'Year', keyboardType: 'numbers-and-punctuation' },
-    { key: 'country', label: 'Country' },
-    { key: 'size', label: 'Size (e.g. 50 x 70 cm)' },
-    { key: 'medium', label: 'Medium' },
-  ];
+const DETAIL_FIELDS = [
+  { key: 'artist', label: 'Artist' },
+  { key: 'year', label: 'Year', keyboardType: 'numbers-and-punctuation' },
+  { key: 'country', label: 'Country' },
+  { key: 'size', label: 'Size (e.g. 50 x 70 cm)' },
+  { key: 'medium', label: 'Medium' },
+];
+
+function DetailsForm({ hints, setHints, missingFields, onSubmit }) {
+  const fields = DETAIL_FIELDS.filter(
+    (field) => !Array.isArray(missingFields) || missingFields.includes(field.key),
+  );
   return (
     <View style={styles.details}>
       <Text style={styles.detailsTitle}>A few details</Text>
       <Text style={styles.detailsBody}>
-        The appraiser could not identify the piece. Add what you know and it will price it from recorded
-        auction sales.
+        The appraiser could not fill every detail. Add what you know and it will price it from
+        recorded auction sales.
       </Text>
       {fields.map((field) => (
         <TextInput
@@ -333,7 +352,7 @@ function ValueScreen({ result, onBack }) {
     ['Medium', identity.medium],
     ['Dimensions', identity.dimensions],
     ['Year', identity.year],
-    ['Country', identity.country],
+    ['Origin', identity.country],
     ['Edition', identity.edition],
   ].filter(([, v]) => v);
 
@@ -372,6 +391,12 @@ function ValueScreen({ result, onBack }) {
               <Text style={styles.kvValue}>{String(val)}</Text>
             </View>
           ))}
+        </Section>
+      ) : null}
+
+      {identity.provenance ? (
+        <Section title="Provenance">
+          <Text style={styles.provenance}>{identity.provenance}</Text>
         </Section>
       ) : null}
 
@@ -564,5 +589,6 @@ const styles = StyleSheet.create({
   similarMeta: { color: COLORS.muted, fontSize: 12, marginTop: 3 },
   similarOrg: { color: COLORS.muted, fontSize: 11, marginTop: 2 },
   similarPrice: { color: COLORS.brass, fontWeight: '700' },
+  provenance: { color: COLORS.text, lineHeight: 20 },
   sources: { color: COLORS.muted, fontSize: 11, marginBottom: 8 },
 });
