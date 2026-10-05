@@ -7,6 +7,7 @@
     "postinstall": "npm --prefix server install",
     "server": "npm --prefix server start",
     "ingest": "npm --prefix server run ingest",
+    "ingest:all": "npm --prefix server run ingest:all",
     "test": "npm --prefix server test",
     "app": "npm --prefix app start",
     "app:android": "npm --prefix app run android"

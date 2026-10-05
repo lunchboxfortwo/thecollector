@@ -8,6 +8,7 @@
   "scripts": {
     "start": "node src/index.js",
     "ingest": "node src/ingest.js",
+    "ingest:all": "node src/ingest.js --all",
     "test": "node --test"
   },
   "engines": {
