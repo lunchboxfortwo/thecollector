@@ -130,8 +130,9 @@ npx expo start
   `expo-image-picker`. Choosing a source moves down into the reader, not sideways.
 - Reader: the chosen photo fills the screen and a bottom sheet two thirds high holds the chat.
   Sending calls `POST /appraise` and renders the result in the chat: identification, the value
-  range with confidence, basis and as-of, provenance, and similar sales; an unidentified piece
-  asks for artist, year, country, size and medium as chips with a free-text answer.
+  range with confidence, basis and as-of, identified origin and provenance, and similar sales; an
+  unidentified piece asks for the fields the server lists as missing (artist, year, country, size,
+  medium) as chips with a free-text answer.
 
 ### Emulator runbook (this machine)
 

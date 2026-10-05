@@ -227,7 +227,20 @@ export default function App() {
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
-      setResult(await res.json());
+      const json = await res.json();
+      setResult(json);
+      if (json.status === 'needs_details') {
+        // Keep whatever the identifier already filled and only ask for the rest.
+        const identified = json.identity || {};
+        setHints((prev) => ({
+          ...prev,
+          artist: prev.artist || identified.artist || '',
+          year: prev.year || identified.year || '',
+          country: prev.country || identified.country || '',
+          size: prev.size || identified.dimensions || '',
+          medium: prev.medium || identified.medium || '',
+        }));
+      }
     } catch (err) {
       setError(`Could not reach the appraiser at ${base}. Is the backend running?`);
     } finally {
@@ -528,7 +541,9 @@ function Reader({
           : 'Type what you know…';
 
   const method = result?.identity?.method === 'catalog' ? 'catalog' : 'vision';
-  const origin = originText(result?.origin ?? result?.identity?.origin);
+  const origin = originText(
+    result?.origin ?? result?.identity?.origin ?? result?.identity?.country,
+  );
   const provenance = Array.isArray(result?.provenance) ? result.provenance : [];
   const sources = Array.isArray(result?.sources) ? result.sources : [];
   const similar = Array.isArray(result?.similar) ? result.similar : [];

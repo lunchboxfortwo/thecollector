@@ -6,7 +6,7 @@ export function visionConfig() {
   return {
     key,
     url: process.env.VISION_API_URL || 'https://openrouter.ai/api/v1/chat/completions',
-    model: process.env.VISION_MODEL || 'openai/gpt-4o-mini',
+    model: process.env.VISION_MODEL || 'google/gemini-3.5-flash',
   };
 }
 
@@ -23,8 +23,10 @@ function clean(value) {
 
 const PROMPT = (note) => `You are an art and collectible cataloguer. Identify the single work shown in the image.
 Reply with ONLY minified JSON, no markdown fences:
-{"artist":string|null,"title":string|null,"medium":string|null,"dimensions":string|null,"year":string|null,"country":string|null,"edition":string|null,"confidence":number}
-Use null for any field you cannot determine. "confidence" is 0..1.
+{"artist":string|null,"title":string|null,"medium":string|null,"dimensions":string|null,"year":string|null,"country":string|null,"provenance":string|null,"edition":string|null,"confidence":number}
+Use null for any field you cannot determine. "country" is the work's country of origin.
+"provenance" is one short sentence on where the work comes from (gallery, collection, auction or publication history) or null.
+"confidence" is 0..1.
 Additional information from the user (may be empty): ${note || '(none)'}`;
 
 export async function identifyFromImage({ imageBase64, mimeType, imageUrl, note } = {}) {
@@ -61,21 +63,23 @@ export async function identifyFromImage({ imageBase64, mimeType, imageUrl, note 
     const json = await res.json();
     const text = json?.choices?.[0]?.message?.content ?? '';
     const parsed = JSON.parse(String(text).replace(/```(?:json)?/gi, '').trim());
-    const artist = clean(parsed.artist);
-    const title = clean(parsed.title);
-    if (!artist && !title) {
+    const fields = {
+      artist: clean(parsed.artist),
+      title: clean(parsed.title),
+      medium: clean(parsed.medium),
+      dimensions: clean(parsed.dimensions),
+      year: clean(parsed.year),
+      country: clean(parsed.country),
+      provenance: clean(parsed.provenance),
+      edition: clean(parsed.edition),
+    };
+    if (!Object.values(fields).some(Boolean)) {
       return { identified: false, reason: 'model returned no identity', raw: parsed };
     }
     return {
       identified: true,
       method: 'vision',
-      artist,
-      title,
-      medium: clean(parsed.medium),
-      dimensions: clean(parsed.dimensions),
-      year: clean(parsed.year),
-      country: clean(parsed.country),
-      edition: clean(parsed.edition),
+      ...fields,
       match_confidence: Number(parsed.confidence) || 0.5,
     };
   } catch (err) {
