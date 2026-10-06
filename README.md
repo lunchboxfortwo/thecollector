@@ -174,7 +174,9 @@ cd android && ./gradlew assembleRelease
 adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```
 
-This is for personal emulator testing only; it is not uploaded to any store.
+Releases are tagged with the plain app version — `vX.Y.Z`, for example `v1.1.0`, with no
+`-emulator` suffix — and attach `app-release.apk`. This is for personal testing only and is not
+uploaded to any store.
 
 ### Branding / assets
 
