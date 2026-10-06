@@ -167,13 +167,33 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
   app.disable('x-powered-by');
   app.use(express.json({ limit: '30mb' }));
 
+  // Cache the model and rebuild only on a throttled timer so a growing sales
+  // table (active ingest) cannot trigger a rebuild on every request.
+  const REBUILD_MS = Math.max(0, Number(process.env.MODEL_REBUILD_MINUTES ?? 15)) * 60_000;
   let modelCache = null;
   let modelCount = -1;
+  let modelBuiltAt = 0;
+  let rebuilding = false;
+  const startRebuild = () => {
+    rebuilding = true;
+    setImmediate(() => {
+      try {
+        modelCache = buildModel(allSales(database));
+        modelCount = salesCount(database);
+        modelBuiltAt = Date.now();
+      } finally {
+        rebuilding = false;
+      }
+    });
+  };
   const getModel = () => {
     const count = salesCount(database);
-    if (!modelCache || count !== modelCount) {
+    if (!modelCache) {
       modelCache = buildModel(allSales(database));
       modelCount = count;
+      modelBuiltAt = Date.now();
+    } else if (!rebuilding && count !== modelCount && Date.now() - modelBuiltAt >= REBUILD_MS) {
+      startRebuild();
     }
     return modelCache;
   };
