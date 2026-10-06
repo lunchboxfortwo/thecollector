@@ -1,6 +1,6 @@
 {
   "name": "thecollector",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "The Collector — art & collectible appraisal backend plus Expo app",
   "scripts": {
