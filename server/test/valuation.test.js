@@ -10,6 +10,8 @@ import {
   normalizeTitle,
   parseAreaCm2,
   parseYear,
+  MEDIUM_BASELINE,
+  MEDIUM_CLASSES,
 } from '../src/valuation.js';
 
 // ---------------------------------------------------------------------------
@@ -172,6 +174,125 @@ test('artist matching folds diacritics and unknown artists pool', () => {
   assert.equal(unknown.ok, true);
   assert.equal(unknown.query.artist_slug, null);
   assert.ok(unknown.low > 0 && unknown.high > unknown.low);
+});
+
+// ---------------------------------------------------------------------------
+// equivalence with the previous dense dummy-variable fit
+// ---------------------------------------------------------------------------
+
+// Independent oracle: the dense design the fixed-effects rewrite replaced, where
+// every artist is its own column. A wrong transform would move these prices.
+function denseDot(a, b) {
+  let sum = 0;
+  for (let i = 0; i < a.length; i++) sum += a[i] * b[i];
+  return sum;
+}
+
+function denseMedian(values) {
+  if (!values.length) return null;
+  const sorted = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+function denseSolve(A, b) {
+  const n = A.length;
+  const M = A.map((row, i) => [...row, b[i]]);
+  for (let col = 0; col < n; col++) {
+    let pivot = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(M[r][col]) > Math.abs(M[pivot][col])) pivot = r;
+    if (Math.abs(M[pivot][col]) < 1e-12) return null;
+    [M[col], M[pivot]] = [M[pivot], M[col]];
+    const pv = M[col][col];
+    for (let c = col; c <= n; c++) M[col][c] /= pv;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = M[r][col];
+      if (!f) continue;
+      for (let c = col; c <= n; c++) M[r][c] -= f * M[col][c];
+    }
+  }
+  return M.map((row) => row[n]);
+}
+
+function denseFit(sales) {
+  const rows = sales.map((r) => ({ ...r, logPrice: Math.log10(r.price_cents / 100) }));
+  const areas = rows.map((r) => r.area_cm2).filter((v) => Number.isFinite(v) && v > 0);
+  const years = rows.map((r) => r.creation_year).filter((v) => Number.isFinite(v) && v > 1500 && v < 2100);
+  const defaultLogArea = areas.length ? Math.log10(denseMedian(areas)) : Math.log10(1000);
+  const defaultYear = years.length ? denseMedian(years) : 1980;
+  const artists = [...new Set(rows.map((r) => r.artist_slug))].sort();
+  const artistBaseline = artists[0] ?? null;
+  const featureRow = (r) => {
+    const logArea = Number.isFinite(r.area_cm2) && r.area_cm2 > 0 ? Math.log10(r.area_cm2) : defaultLogArea;
+    const year = Number.isFinite(r.creation_year) && r.creation_year > 1500 && r.creation_year < 2100 ? r.creation_year : defaultYear;
+    const feats = [1];
+    for (const a of artists) if (a !== artistBaseline) feats.push(a === r.artist_slug ? 1 : 0);
+    feats.push(logArea);
+    feats.push((year - 1900) / 100);
+    for (const cls of MEDIUM_CLASSES) if (cls !== MEDIUM_BASELINE) feats.push(r.medium_class === cls ? 1 : 0);
+    return feats;
+  };
+  const X = rows.map(featureRow);
+  const y = rows.map((r) => r.logPrice);
+  const p = X[0].length;
+  const XtX = Array.from({ length: p }, () => new Array(p).fill(0));
+  const Xty = new Array(p).fill(0);
+  for (let i = 0; i < X.length; i++) {
+    for (let a = 0; a < p; a++) {
+      Xty[a] += X[i][a] * y[i];
+      for (let b = 0; b < p; b++) XtX[a][b] += X[i][a] * X[i][b];
+    }
+  }
+  for (let a = 0; a < p; a++) XtX[a][a] += 1e-6;
+  return { beta: denseSolve(XtX, Xty), artists, featureRow };
+}
+
+test('fixed-effects fit reproduces the dense dummy-variable prices', () => {
+  // Unique titles so only the hedonic path is exercised, and all six medium
+  // classes present (as in the ingested table) so both designs are full rank.
+  const media = ['oil on canvas', 'lithograph print', 'gelatin silver photograph', 'ink on paper', 'bronze', 'mixed media'];
+  const sales = syntheticSales(400).map((r, i) => {
+    const title = `Unique Work ${i}`;
+    const medium_text = media[i % media.length];
+    return { ...r, title, title_norm: normalizeTitle(title), medium_text, medium_class: classifyMedium(medium_text) };
+  });
+  const model = buildModel(sales);
+  const dense = denseFit(sales);
+  assert.ok(model.beta && dense.beta, 'both fits should solve');
+
+  const queries = [
+    { artist: 'artist-a', title: 'Query One', area_cm2: 500, medium_class: 'painting', creation_year: 1950 },
+    { artist: 'artist-b', title: 'Query Two', area_cm2: 3000, medium_class: 'print', creation_year: 1930 },
+    { artist: 'artist-c', title: 'Query Three', area_cm2: 800, medium_class: 'work_on_paper', creation_year: 1970 },
+  ];
+  for (const query of queries) {
+    const got = estimate(model, query);
+    assert.equal(got.method, 'hedonic');
+    const want = denseDot(dense.featureRow(got.query), dense.beta);
+    const gotLog10 = Math.log10(got.predicted);
+    assert.ok(
+      Math.abs(gotLog10 - want) < 1e-6,
+      `${query.artist}: fixed effects ${gotLog10} vs dense ${want}`,
+    );
+  }
+
+  // Unknown artist pools equally over every known artist intercept.
+  const unknown = estimate(model, {
+    artist: 'Nobody At All',
+    title: 'Query Four',
+    area_cm2: 1200,
+    medium_class: 'sculpture',
+    creation_year: 1960,
+  });
+  assert.equal(unknown.query.artist_slug, null);
+  const pooled =
+    dense.artists.reduce((sum, artist) => sum + denseDot(dense.featureRow({ ...unknown.query, artist_slug: artist }), dense.beta), 0) /
+    dense.artists.length;
+  assert.ok(
+    Math.abs(Math.log10(unknown.predicted) - pooled) < 1e-6,
+    `pooled: fixed effects ${Math.log10(unknown.predicted)} vs dense ${pooled}`,
+  );
 });
 
 // ---------------------------------------------------------------------------
