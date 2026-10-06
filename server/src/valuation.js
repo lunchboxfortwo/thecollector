@@ -159,21 +159,6 @@ function solveLinearSystem(A, b) {
   return M.map((row) => row[n]);
 }
 
-// Ridge-regularised ordinary least squares.
-function ols(X, y) {
-  const p = X[0].length;
-  const XtX = Array.from({ length: p }, () => new Array(p).fill(0));
-  const Xty = new Array(p).fill(0);
-  for (let i = 0; i < X.length; i++) {
-    const xi = X[i];
-    for (let a = 0; a < p; a++) {
-      Xty[a] += xi[a] * y[i];
-      for (let b = 0; b < p; b++) XtX[a][b] += xi[a] * xi[b];
-    }
-  }
-  for (let a = 0; a < p; a++) XtX[a][a] += 1e-6;
-  return solveLinearSystem(XtX, Xty);
-}
 
 // ---------------------------------------------------------------------------
 // model
@@ -190,6 +175,81 @@ function prepareRow(sale) {
     title_norm: sale.title_norm || normalizeTitle(sale.title),
     logPrice: price_cents > 0 ? Math.log10(price_cents / 100) : null,
   };
+}
+
+// Non-artist hedonic columns: log area, centred year, and medium-class dummies.
+// Artist identity is a fixed effect, so it never becomes a dense column.
+function otherFeatures(core, r) {
+  const logArea = Number.isFinite(r.area_cm2) && r.area_cm2 > 0 ? Math.log10(r.area_cm2) : core.defaultLogArea;
+  const year = Number.isFinite(r.creation_year) && r.creation_year > 1500 && r.creation_year < 2100 ? r.creation_year : core.defaultYear;
+  const feats = [logArea, (year - 1900) / 100];
+  for (const cls of MEDIUM_CLASSES) if (cls !== MEDIUM_BASELINE) feats.push(r.medium_class === cls ? 1 : 0);
+  return feats;
+}
+
+// Within-artist fixed-effects fit. Demeaning each artist's rows and fitting the
+// seven non-artist columns (Frisch-Waugh-Lovell) gives the same slopes as the
+// previous design, which carried one dummy column per artist. Each artist
+// intercept is then the group mean of the residual, y - beta'z.
+function withinArtistFit(rows, core) {
+  const p = otherFeatures(core, rows[0]).length;
+
+  const groups = new Map();
+  for (const r of rows) {
+    let g = groups.get(r.artist_slug);
+    if (!g) {
+      g = { n: 0, sz: new Array(p).fill(0), sy: 0 };
+      groups.set(r.artist_slug, g);
+    }
+    g.n++;
+    g.sy += r.logPrice;
+    const z = otherFeatures(core, r);
+    for (let j = 0; j < p; j++) g.sz[j] += z[j];
+  }
+
+  const means = new Map();
+  for (const [slug, g] of groups) {
+    means.set(slug, { z: g.sz.map((v) => v / g.n), y: g.sy / g.n });
+  }
+
+  const XtX = Array.from({ length: p }, () => new Array(p).fill(0));
+  const Xty = new Array(p).fill(0);
+  const d = new Array(p);
+  for (const r of rows) {
+    const z = otherFeatures(core, r);
+    const m = means.get(r.artist_slug);
+    const dy = r.logPrice - m.y;
+    for (let j = 0; j < p; j++) d[j] = z[j] - m.z[j];
+    for (let a = 0; a < p; a++) {
+      Xty[a] += d[a] * dy;
+      for (let b = 0; b < p; b++) XtX[a][b] += d[a] * d[b];
+    }
+  }
+  for (let a = 0; a < p; a++) XtX[a][a] += 1e-6;
+  const beta = solveLinearSystem(XtX, Xty);
+  if (!beta) return null;
+
+  const residual = new Map();
+  for (const r of rows) {
+    let g = residual.get(r.artist_slug);
+    if (!g) {
+      g = { sum: 0, n: 0 };
+      residual.set(r.artist_slug, g);
+    }
+    g.sum += r.logPrice - dot(otherFeatures(core, r), beta);
+    g.n++;
+  }
+
+  const artistEffects = new Map();
+  let total = 0;
+  for (const slug of core.artists) {
+    const g = residual.get(slug);
+    const effect = g && g.n ? g.sum / g.n : 0;
+    artistEffects.set(slug, effect);
+    total += effect;
+  }
+  const meanArtistEffect = core.artists.length ? total / core.artists.length : 0;
+  return { beta, artistEffects, meanArtistEffect };
 }
 
 function buildCore(preparedRows) {
@@ -217,20 +277,30 @@ function buildCore(preparedRows) {
     editionIndex.get(key).push(r);
   }
 
-  const featureRow = (r) => {
-    const logArea = Number.isFinite(r.area_cm2) && r.area_cm2 > 0 ? Math.log10(r.area_cm2) : defaultLogArea;
-    const year = Number.isFinite(r.creation_year) && r.creation_year > 1500 && r.creation_year < 2100 ? r.creation_year : defaultYear;
-    const feats = [1];
-    for (const a of artists) if (a !== artistBaseline) feats.push(a === r.artist_slug ? 1 : 0);
-    feats.push(logArea);
-    feats.push((year - 1900) / 100);
-    for (const cls of MEDIUM_CLASSES) if (cls !== MEDIUM_BASELINE) feats.push(r.medium_class === cls ? 1 : 0);
-    return feats;
+  const core = {
+    rows,
+    artists,
+    artistBaseline,
+    artistByName,
+    defaultLogArea,
+    defaultYear,
+    editionIndex,
+    artistMedians: new Map(),
+    beta: null,
+    artistEffects: new Map(),
+    meanArtistEffect: 0,
   };
 
-  let beta = null;
-  if (rows.length && rows.length >= featureRow(rows[0]).length + 5) {
-    beta = ols(rows.map(featureRow), rows.map((r) => r.logPrice));
+  // Same guard as the old dense fit: enough rows to identify the intercept,
+  // the artist effects and the seven non-artist columns.
+  const otherCount = 2 + (MEDIUM_CLASSES.length - 1);
+  if (rows.length && rows.length >= artists.length + otherCount + 5) {
+    const fit = withinArtistFit(rows, core);
+    if (fit) {
+      core.beta = fit.beta;
+      core.artistEffects = fit.artistEffects;
+      core.meanArtistEffect = fit.meanArtistEffect;
+    }
   }
 
   const artistMedians = new Map();
@@ -240,19 +310,9 @@ function buildCore(preparedRows) {
     byArtist.get(r.artist_slug).push(r.logPrice);
   }
   for (const [slug, vals] of byArtist) artistMedians.set(slug, median(vals));
+  core.artistMedians = artistMedians;
 
-  return {
-    rows,
-    artists,
-    artistBaseline,
-    artistByName,
-    defaultLogArea,
-    defaultYear,
-    editionIndex,
-    artistMedians,
-    beta,
-    featureRow,
-  };
+  return core;
 }
 
 // Resolve a free-form query into core feature fields.
@@ -283,15 +343,12 @@ function predictCore(core, q) {
     return { log10: median(comps.map((r) => r.logPrice)), method: 'edition', comps };
   }
   if (core.beta) {
-    if (q.artist_slug && core.artists.includes(q.artist_slug)) {
-      return { log10: dot(core.featureRow(q), core.beta), method: 'hedonic', comps: [] };
-    }
-    // Unknown artist: pool over every known artist rather than picking one intercept.
-    let sum = 0;
-    for (const artist of core.artists) {
-      sum += dot(core.featureRow({ ...q, artist_slug: artist }), core.beta);
-    }
-    return { log10: sum / core.artists.length, method: 'hedonic', comps: [] };
+    // Known artist: its own fixed effect. Unknown artist: pool over every known
+    // artist rather than picking one intercept.
+    const intercept = q.artist_slug && core.artistEffects.has(q.artist_slug)
+      ? core.artistEffects.get(q.artist_slug)
+      : core.meanArtistEffect;
+    return { log10: intercept + dot(otherFeatures(core, q), core.beta), method: 'hedonic', comps: [] };
   }
   if (q.artist_slug && core.artistMedians.has(q.artist_slug)) {
     return { log10: core.artistMedians.get(q.artist_slug), method: 'hedonic', comps: [] };
