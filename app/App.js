@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   ActivityIndicator,
+  Animated,
+  PanResponder,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -368,6 +370,7 @@ export default function App() {
               setDraft={setDraft}
               onSend={sendComposer}
               onBack={backToSources}
+              reduceMotion={reduceMotion}
             />
           </View>
         </ScrollView>
@@ -510,8 +513,44 @@ function Reader({
   setDraft,
   onSend,
   onBack,
+  reduceMotion,
 }) {
   const [composerFocus, setComposerFocus] = useState(false);
+
+  // Drag-down dismiss: pulling the grab/head strip down past a threshold
+  // returns to the landing source picker. A small or horizontal drag snaps
+  // back. The responder is on the grab/head wrapper only, so the chat
+  // ScrollView and composer keep their own gestures.
+  const DRAG_THRESHOLD = 72;
+  const dragY = useRef(new Animated.Value(0)).current;
+  const onBackRef = useRef(onBack);
+  onBackRef.current = onBack;
+  const reduceMotionRef = useRef(reduceMotion);
+  reduceMotionRef.current = reduceMotion;
+  const dragBack = () => {
+    if (reduceMotionRef.current) dragY.setValue(0);
+    else Animated.spring(dragY, { toValue: 0, useNativeDriver: true }).start();
+  };
+  const dragResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, g) => g.dy > 8 && Math.abs(g.dy) > Math.abs(g.dx),
+      onPanResponderMove: (_, g) => {
+        dragY.setValue(Math.max(0, g.dy));
+      },
+      onPanResponderRelease: (_, g) => {
+        if (g.dy > DRAG_THRESHOLD && Math.abs(g.dy) > Math.abs(g.dx)) {
+          dragY.setValue(0);
+          onBackRef.current();
+          return;
+        }
+        dragBack();
+      },
+      onPanResponderTerminate: () => {
+        dragBack();
+      },
+    }),
+  ).current;
   const status = loading
     ? 'reading'
     : error
@@ -577,13 +616,18 @@ function Reader({
         style={styles.sheetOuter}
         front={styles.sheetFront}
       >
-        <View style={styles.grab} />
-        <View style={styles.sheetHead}>
-          <Text style={styles.sheetHeadText}>READING</Text>
-          <Text testID="reading-method" style={styles.sheetHeadText}>
-            {method}
-          </Text>
-        </View>
+        <Animated.View
+          style={[styles.grabZone, { transform: [{ translateY: dragY }] }]}
+          {...dragResponder.panHandlers}
+        >
+          <View style={styles.grab} />
+          <View style={styles.sheetHead}>
+            <Text style={styles.sheetHeadText}>READING</Text>
+            <Text testID="reading-method" style={styles.sheetHeadText}>
+              {method}
+            </Text>
+          </View>
+        </Animated.View>
 
         <ScrollView
           style={styles.chat}
@@ -1129,12 +1173,18 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     shadowOffset: { width: 0, height: -16 },
   },
+  grabZone: {
+    minHeight: 44,
+    justifyContent: 'center',
+    paddingTop: 11,
+    paddingBottom: 14,
+  },
   grab: {
     width: THEME.size.grabW,
     height: THEME.size.grabH,
     backgroundColor: COLORS.line,
     alignSelf: 'center',
-    marginTop: 11,
+    marginTop: 0,
     marginBottom: 5,
   },
   sheetHead: {
