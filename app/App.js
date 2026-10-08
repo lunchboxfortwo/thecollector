@@ -18,6 +18,7 @@ import {
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 
 // Reachable address of the box running the backend, so a real phone can hit it
@@ -172,7 +173,19 @@ function originText(origin) {
 }
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppShell />
+    </SafeAreaProvider>
+  );
+}
+
+function AppShell() {
   const { height } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  // With 3-button navigation the nav bar overlaps edge-to-edge content; lift
+  // the page area above it so nothing is drawn behind it.
+  const pageHeight = height - insets.bottom;
   const scrollRef = useRef(null);
 
   const [page, setPage] = useState('landing');
@@ -253,7 +266,7 @@ export default function App() {
   function moveTo(pageName, animated = true) {
     setPage(pageName);
     scrollRef.current?.scrollTo({
-      y: pageName === 'reader' ? height : 0,
+      y: pageName === 'reader' ? pageHeight : 0,
       animated: animated && !reduceMotion,
     });
   }
@@ -331,7 +344,7 @@ export default function App() {
       style={styles.flex}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <View style={styles.root}>
+      <View style={[styles.root, { paddingBottom: insets.bottom }]}>
         <StatusBar style="dark" />
         <ScrollView
           ref={scrollRef}
@@ -341,10 +354,10 @@ export default function App() {
           showsVerticalScrollIndicator={false}
           onMomentumScrollEnd={(event) => {
             const y = event.nativeEvent.contentOffset.y;
-            setPage(y > height / 2 ? 'reader' : 'landing');
+            setPage(y > pageHeight / 2 ? 'reader' : 'landing');
           }}
         >
-          <View style={{ height }}>
+          <View style={{ height: pageHeight }}>
             <Landing
               linkOpen={linkOpen}
               setLinkOpen={setLinkOpen}
@@ -356,7 +369,7 @@ export default function App() {
               onOpenBackend={() => setBackendOpen(true)}
             />
           </View>
-          <View style={{ height }}>
+          <View style={{ height: pageHeight }}>
             <Reader
               source={source}
               result={result}
