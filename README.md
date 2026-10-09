@@ -80,18 +80,34 @@ Result (`status` is `priced`, `needs_details`, or `refused`):
 
 - `parseAreaCm2` prefers a stated cm measurement and only converts inches when no cm exists.
 - Medium is bucketed into `print`, `photograph`, `sculpture`, `painting`, `work_on_paper`, `other`.
-- Edition gate: two or more prior sales sharing artist + normalized title (generic titles such as
-  "Untitled" are skipped) → median of those sales in log space.
+- Edition gate: two or more prior sales sharing artist + normalized title + **medium class**
+  (generic titles such as "Untitled" are skipped) → median of those sales in log space. The medium
+  class is part of the key, so a painting never binds to same-title prints.
 - Otherwise a hedonic least-squares fit of `log10(price)` on artist intercepts, `log10(area)`,
   medium dummies and creation year; an unmatched artist is pooled over the artists rather than
   pinned to one intercept. Unknown artist names are matched diacritic-insensitively
   (`Joan Miro` = `Joan Miró`).
-- The band is the quantiles of held-out log residuals, so it is calibrated rather than assumed.
-- `npm test` reports empirical coverage at 50/80/90 on both a synthetic sample and, when present,
-  the ingested database.
+- The displayed range is the central 60% of the prediction's own comparable sales (same artist and
+  medium, nearest areas first; the edition's matched sales when it is an edition). The comp spread
+  is inflated by a factor measured on the held-out split so it covers out-of-sample sales at the
+  stated level. When there are too few comps the range falls back to the held-out residual band.
+- `npm test` reports empirical coverage at 50/60/80/90 on both a synthetic sample and, when
+  present, the ingested database.
 
-On this machine's ingest (21,970 realized sales, 7 artists) the held-out coverage was
-**51.3% / 80.4% / 90.4%** at nominal 50/80/90, with a 80% band of ≈ ×5.4 either side.
+On this machine's ingest (24,614 realized sales, 8 artists) the held-out coverage was
+**49.5% / 80.0% / 90.1%** at nominal 50/80/90.
+
+### `POST /chat`
+
+A free-form text message from the chat log, answered conversationally about pricing, paintings and
+art. It never runs the image path and never returns a fresh estimate.
+
+Request: `{ "message": "What offer should I put down?", "identity": {…}, "value": {…},
+"confidence": {…}, "history": [ { "role": "user"|"assistant", "text": "…" } ] }`
+
+Result: `{ "status": "answered", "answer": "…", "source": "model"|"grounded" }`. With
+`OPENROUTER_API_KEY` set it asks a text model; unset (or on failure) it returns a grounded answer
+built from the current appraisal. Overridable: `CHAT_MODEL`, `CHAT_API_URL`, `CHAT_TIMEOUT_MS`.
 
 ### Optional vision
 
@@ -129,10 +145,12 @@ npx expo start
   Link expands a URL field while album and camera stay reachable; Album and Camera use
   `expo-image-picker`. Choosing a source moves down into the reader, not sideways.
 - Reader: the chosen photo fills the screen and a bottom sheet two thirds high holds the chat.
-  Sending calls `POST /appraise` and renders the result in the chat: identification, the value
-  range with confidence, basis and as-of, identified origin and provenance, and similar sales; an
-  unidentified piece asks for the fields the server lists as missing (artist, year, country, size,
-  medium) as chips with a free-text answer.
+  An added photo or filled field calls `POST /appraise` and renders the result in the chat:
+  identification, the value range with confidence, basis and as-of, identified origin and
+  provenance, and similar sales; an unidentified piece asks for the fields the server lists as
+  missing (artist, year, country, size, medium) as chips with a free-text answer. A free-form
+  message goes to `POST /chat` instead and is answered in the log. On Android the reading sheet is
+  lifted above the software keyboard and the chat scrolls to the newest line.
 
 ### Emulator runbook (this machine)
 

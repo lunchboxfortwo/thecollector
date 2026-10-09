@@ -3,6 +3,7 @@ import express from 'express';
 import { openDb, allSales, salesCount } from './db.js';
 import { buildModel, estimate, roundNice } from './valuation.js';
 import { identifyFromImage, visionConfigured } from './vision.js';
+import { answerQuestion, groundedAnswer } from './chat.js';
 
 const HINT_FIELDS = ['artist', 'title', 'year', 'country', 'size', 'medium'];
 // The five extra fields the app prompts for when it cannot identify a piece.
@@ -118,11 +119,17 @@ function basisReasons(est, model, identity) {
   if (identity.artist && !est.query.artist_slug) {
     reasons.push('Artist was not matched in the comps, so the pooled model was used.');
   }
-  reasons.push(
-    `Band is ×${est.band.toFixed(1)} either side, calibrated on held-out residuals to ${Math.round(est.coverage * 100)}% coverage.`,
-  );
-  if (model.coverage) {
-    reasons.push(`Held-out empirical coverage at 80%: ${(model.coverage[0.8] * 100).toFixed(0)}%.`);
+  const pct = Math.round(est.coverage * 100);
+  if (est.bandSource === 'comps') {
+    reasons.push(
+      `Range is the central ${pct}% of ${est.comparableCount} comparable sales for this artist and medium (×${est.band.toFixed(1)} either side).`,
+    );
+  } else {
+    reasons.push(`Band is ×${est.band.toFixed(1)} either side, calibrated on held-out residuals to ${pct}% coverage.`);
+  }
+  const empirical = model.coverage?.[est.coverage];
+  if (empirical != null) {
+    reasons.push(`Held-out empirical coverage at ${pct}%: ${(empirical * 100).toFixed(0)}%.`);
   }
   return reasons;
 }
@@ -161,7 +168,7 @@ function provenanceFrom(comps) {
   }));
 }
 
-export function createApp({ db, vision = identifyFromImage, visionEnabled = visionConfigured } = {}) {
+export function createApp({ db, vision = identifyFromImage, visionEnabled = visionConfigured, chat = answerQuestion } = {}) {
   const database = db || openDb();
   const app = express();
   app.disable('x-powered-by');
@@ -199,6 +206,30 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
   };
 
   app.get('/health', (_req, res) => res.json({ ok: true }));
+
+  // A free-form chat message, answered conversationally in the pricing/art
+  // remit. It never runs the image path and never returns a fresh estimate.
+  app.post('/chat', async (req, res) => {
+    const body = req.body;
+    if (body == null || typeof body !== 'object' || Array.isArray(body)) {
+      return badRequest(res, 'body must be a JSON object');
+    }
+    if (typeof body.message !== 'string' || !body.message.trim()) {
+      return badRequest(res, 'message must be a non-empty string');
+    }
+    const result = await chat({
+      message: body.message.trim(),
+      identity: body.identity && typeof body.identity === 'object' ? body.identity : null,
+      value: body.value && typeof body.value === 'object' ? body.value : null,
+      confidence: body.confidence && typeof body.confidence === 'object' ? body.confidence : null,
+      history: Array.isArray(body.history) ? body.history : [],
+    });
+    return res.json({
+      status: 'answered',
+      answer: result?.answer || groundedAnswer({ message: body.message, identity: body.identity, value: body.value }),
+      source: result?.source || 'grounded',
+    });
+  });
 
   app.post('/appraise', async (req, res) => {
     const body = req.body;

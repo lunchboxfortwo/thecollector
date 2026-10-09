@@ -5,7 +5,7 @@ import {
   Animated,
   PanResponder,
   Image,
-  KeyboardAvoidingView,
+  Keyboard,
   Modal,
   Platform,
   Pressable,
@@ -172,6 +172,26 @@ function originText(origin) {
     .join('\n');
 }
 
+// The keyboard height, from the platform's own events. Edge-to-edge Android
+// does not resize the window for the IME, so the reading sheet is lifted by
+// this instead of relying on KeyboardAvoidingView.
+function useKeyboardHeight() {
+  const [height, setHeight] = useState(0);
+  useEffect(() => {
+    const showEvent = Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow';
+    const hideEvent = Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide';
+    const onShow = (event) => setHeight(event?.endCoordinates?.height ?? 0);
+    const onHide = () => setHeight(0);
+    const showSub = Keyboard.addListener(showEvent, onShow);
+    const hideSub = Keyboard.addListener(hideEvent, onHide);
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
+  return height;
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
@@ -187,6 +207,12 @@ function AppShell() {
   // the page area above it so nothing is drawn behind it.
   const pageHeight = height - insets.bottom;
   const scrollRef = useRef(null);
+  const keyboardHeight = useKeyboardHeight();
+  // If the platform already shrank the window for the keyboard, do not lift
+  // again; otherwise the edge-to-edge window keeps its height and we lift.
+  const baseWindowHeight = useRef(height);
+  const resizeDelta = Math.max(0, baseWindowHeight.current - height);
+  const keyboardLift = Math.max(0, keyboardHeight - resizeDelta);
 
   const [page, setPage] = useState('landing');
   const [source, setSource] = useState(null);
@@ -194,6 +220,7 @@ function AppShell() {
   const [linkOpen, setLinkOpen] = useState(false);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMode, setLoadingMode] = useState('appraise');
   const [error, setError] = useState(null);
   const [hints, setHints] = useState({});
   const [activeHint, setActiveHint] = useState(null);
@@ -219,6 +246,7 @@ function AppShell() {
 
   async function runAppraise(src, options = {}) {
     setLoading(true);
+    setLoadingMode('appraise');
     setError(null);
     const body = {};
     if (src?.base64) {
@@ -244,6 +272,10 @@ function AppShell() {
       if (!res.ok) throw new Error(`Server returned ${res.status}`);
       const json = await res.json();
       setResult(json);
+      setTurns((prev) => [
+        ...prev,
+        { id: `r${prev.length}`, role: 'assistant', appraisal: json },
+      ]);
       if (json.status === 'needs_details') {
         // Keep whatever the identifier already filled and only ask for the rest.
         const identified = json.identity || {};
@@ -258,6 +290,45 @@ function AppShell() {
       }
     } catch (err) {
       setError(`Could not reach the appraiser at ${base}. Is the backend running?`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  // A free-form message goes to the conversational orchestrator, never back
+  // through the image path, and never returns a fresh estimate unless asked.
+  async function runChat(text) {
+    setLoading(true);
+    setLoadingMode('chat');
+    setError(null);
+    const base = normalizeApiUrl(apiUrl);
+    const history = turns
+      .filter((turn) => typeof turn.text === 'string')
+      .map((turn) => ({ role: turn.role === 'assistant' ? 'assistant' : 'user', text: turn.text }))
+      .slice(-8);
+    try {
+      const res = await fetch(`${base}/chat`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          message: text,
+          identity: result?.identity ?? null,
+          value: result?.value ?? null,
+          confidence: result?.confidence ?? null,
+          history,
+        }),
+      });
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const json = await res.json();
+      setTurns((prev) => [
+        ...prev,
+        { id: `a${prev.length}`, role: 'assistant', text: json.answer || 'I could not answer that just now.' },
+      ]);
+    } catch (err) {
+      setTurns((prev) => [
+        ...prev,
+        { id: `a${prev.length}`, role: 'assistant', text: `I could not reach the appraiser at ${base}. Is the backend running?` },
+      ]);
     } finally {
       setLoading(false);
     }
@@ -324,14 +395,14 @@ function AppShell() {
     if (activeHint) {
       const merged = { ...hints, [activeHint]: text };
       setHints(merged);
-      setTurns((prev) => [...prev, { id: `t${prev.length}`, label: labelForHint(activeHint), text }]);
+      setTurns((prev) => [...prev, { id: `t${prev.length}`, role: 'user', label: labelForHint(activeHint), text }]);
       setActiveHint(null);
       setDraft('');
       runAppraise(source, { hints: merged });
     } else {
-      setTurns((prev) => [...prev, { id: `t${prev.length}`, label: null, text }]);
+      setTurns((prev) => [...prev, { id: `t${prev.length}`, role: 'user', label: null, text }]);
       setDraft('');
-      runAppraise(source, { note: text });
+      runChat(text);
     }
   }
 
@@ -340,10 +411,7 @@ function AppShell() {
   }
 
   return (
-    <KeyboardAvoidingView
-      style={styles.flex}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <View style={styles.flex}>
       <View style={[styles.root, { paddingBottom: insets.bottom }]}>
         <StatusBar style="dark" />
         <ScrollView
@@ -376,6 +444,8 @@ function AppShell() {
               loading={loading}
               error={error}
               turns={turns}
+              loadingMode={loadingMode}
+              keyboardLift={keyboardLift}
               hints={hints}
               activeHint={activeHint}
               setActiveHint={setActiveHint}
@@ -395,7 +465,7 @@ function AppShell() {
           onClose={() => setBackendOpen(false)}
         />
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
@@ -517,6 +587,8 @@ function Reader({
   source,
   result,
   loading,
+  loadingMode,
+  keyboardLift,
   error,
   turns,
   hints,
@@ -529,6 +601,7 @@ function Reader({
   reduceMotion,
 }) {
   const [composerFocus, setComposerFocus] = useState(false);
+  const chatRef = useRef(null);
 
   // Drag-down dismiss: pulling the grab/head strip down past a threshold
   // returns to the landing source picker. A small or horizontal drag snaps
@@ -565,7 +638,9 @@ function Reader({
     }),
   ).current;
   const status = loading
-    ? 'reading'
+    ? loadingMode === 'chat'
+      ? 'thinking'
+      : 'reading'
     : error
       ? 'offline'
       : result?.status === 'priced'
@@ -576,6 +651,15 @@ function Reader({
             ? 'unsure'
             : 'ready';
 
+  // Keep the newest line in view when the keyboard opens and as turns arrive.
+  useEffect(() => {
+    const timer = setTimeout(
+      () => chatRef.current?.scrollToEnd({ animated: !reduceMotionRef.current }),
+      keyboardLift > 0 ? 60 : 40,
+    );
+    return () => clearTimeout(timer);
+  }, [keyboardLift, turns.length, loading]);
+
   const needsDetails = result?.status === 'needs_details';
   const missing = (result?.missing_fields?.length
     ? result.missing_fields
@@ -583,22 +667,18 @@ function Reader({
   ).map((key) => ({ key }));
 
   const placeholder = loading
-    ? 'Reading the piece…'
+    ? loadingMode === 'chat'
+      ? 'Answering…'
+      : 'Reading the piece…'
     : activeHint
       ? `Type the ${labelForHint(activeHint).toLowerCase()}…`
       : needsDetails
         ? 'Tap a field, or describe the work…'
         : result?.status === 'priced'
-          ? 'Add a correction…'
+          ? 'Ask about this piece…'
           : 'Type what you know…';
 
   const method = result?.identity?.method === 'catalog' ? 'catalog' : 'vision';
-  const origin = originText(
-    result?.origin ?? result?.identity?.origin ?? result?.identity?.country,
-  );
-  const provenance = Array.isArray(result?.provenance) ? result.provenance : [];
-  const sources = Array.isArray(result?.sources) ? result.sources : [];
-  const similar = Array.isArray(result?.similar) ? result.similar : [];
 
   return (
     <View style={styles.reader}>
@@ -626,7 +706,7 @@ function Reader({
 
       <Hard
         shadow={THEME.shadow.sheet}
-        style={styles.sheetOuter}
+        style={[styles.sheetOuter, { bottom: keyboardLift }]}
         front={styles.sheetFront}
       >
         <Animated.View
@@ -643,29 +723,29 @@ function Reader({
         </Animated.View>
 
         <ScrollView
+          ref={chatRef}
           style={styles.chat}
           contentContainerStyle={styles.chatContent}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
           indicatorStyle="black"
         >
-          {turns.map((turn) => (
-            <Hard
-              key={turn.id}
-              shadow={THEME.shadow.card}
-              style={[styles.turnOuter]}
-              front={styles.userBubble}
-            >
-              {turn.label ? <Text style={styles.userLabel}>{turn.label}</Text> : null}
-              <Text style={styles.userText}>{turn.text}</Text>
-            </Hard>
-          ))}
+          {turns.map((turn) => {
+            if (turn.appraisal) return <AppraisalTurn key={turn.id} result={turn.appraisal} />;
+            if (turn.role === 'assistant') return <AssistantBubble key={turn.id} text={turn.text} />;
+            return <UserBubble key={turn.id} turn={turn} />;
+          })}
 
           {loading ? (
             <>
-              <Text style={styles.sys}>reading the piece</Text>
+              <Text style={styles.sys}>
+                {loadingMode === 'chat' ? 'thinking' : 'reading the piece'}
+              </Text>
               <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
                 <ActivityIndicator color={COLORS.berry} />
-                <Text style={styles.bubbleText}>Reading the image…</Text>
+                <Text style={styles.bubbleText}>
+                  {loadingMode === 'chat' ? 'Thinking about that…' : 'Reading the image…'}
+                </Text>
               </Hard>
             </>
           ) : error ? (
@@ -675,7 +755,7 @@ function Reader({
                 <Text style={styles.bubbleText}>{error}</Text>
               </Hard>
             </>
-          ) : !result ? (
+          ) : !turns.length ? (
             <>
               <Text style={styles.sys}>ready</Text>
               <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
@@ -684,43 +764,7 @@ function Reader({
                 </Text>
               </Hard>
             </>
-          ) : result.status === 'priced' ? (
-            <>
-              <Text style={styles.sys}>what I can see</Text>
-              <IdentityBubble identity={result.identity} />
-              <PriceCard result={result} />
-              {origin ? <TextCard label="where it came from" body={origin} /> : null}
-              {provenance.length || sources.length ? (
-                <ProvenanceCard provenance={provenance} sources={sources} />
-              ) : null}
-              {similar.length ? <SimilarCard items={similar} /> : null}
-            </>
-          ) : result.status === 'needs_details' ? (
-            <>
-              <Text style={styles.sys}>what I need</Text>
-              <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
-                <Text style={styles.bubbleText}>
-                  I can&apos;t place this one. Tell me anything you know and I&apos;ll price it from
-                  recorded auction sales.
-                </Text>
-                {(result.confidence?.basis || []).map((line, index) => (
-                  <View key={index} style={styles.whyRow}>
-                    <Text style={styles.whyDot}>•</Text>
-                    <Text style={styles.basisText}>{line}</Text>
-                  </View>
-                ))}
-              </Hard>
-            </>
-          ) : (
-            <>
-              <Text style={styles.sys}>what I can&apos;t do</Text>
-              <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
-                <Text style={styles.bubbleText}>
-                  {(result.confidence?.basis || ['I could not price this piece.']).join(' ')}
-                </Text>
-              </Hard>
-            </>
-          )}
+          ) : null}
         </ScrollView>
 
         {needsDetails && !loading ? (
@@ -780,6 +824,81 @@ function Reader({
         </Hard>
       </Hard>
     </View>
+  );
+}
+
+function UserBubble({ turn }) {
+  return (
+    <Hard shadow={THEME.shadow.card} style={styles.turnOuter} front={styles.userBubble}>
+      {turn.label ? <Text style={styles.userLabel}>{turn.label}</Text> : null}
+      <Text style={styles.userText}>{turn.text}</Text>
+    </Hard>
+  );
+}
+
+function AssistantBubble({ text }) {
+  return (
+    <>
+      <Text style={styles.sys}>the collector</Text>
+      <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
+        <Text style={styles.bubbleText}>{text}</Text>
+      </Hard>
+    </>
+  );
+}
+
+// The appraisal blocks as one turn in the log, so a later chat answer follows
+// it in order instead of the appraisal re-rendering below every message.
+function AppraisalTurn({ result }) {
+  const origin = originText(
+    result?.origin ?? result?.identity?.origin ?? result?.identity?.country,
+  );
+  const provenance = Array.isArray(result?.provenance) ? result.provenance : [];
+  const sources = Array.isArray(result?.sources) ? result.sources : [];
+  const similar = Array.isArray(result?.similar) ? result.similar : [];
+
+  if (result?.status === 'priced') {
+    return (
+      <>
+        <Text style={styles.sys}>what I can see</Text>
+        <IdentityBubble identity={result.identity} />
+        <PriceCard result={result} />
+        {origin ? <TextCard label="where it came from" body={origin} /> : null}
+        {provenance.length || sources.length ? (
+          <ProvenanceCard provenance={provenance} sources={sources} />
+        ) : null}
+        {similar.length ? <SimilarCard items={similar} /> : null}
+      </>
+    );
+  }
+  if (result?.status === 'needs_details') {
+    return (
+      <>
+        <Text style={styles.sys}>what I need</Text>
+        <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
+          <Text style={styles.bubbleText}>
+            I can&apos;t place this one. Tell me anything you know and I&apos;ll price it from
+            recorded auction sales.
+          </Text>
+          {(result.confidence?.basis || []).map((line, index) => (
+            <View key={index} style={styles.whyRow}>
+              <Text style={styles.whyDot}>•</Text>
+              <Text style={styles.basisText}>{line}</Text>
+            </View>
+          ))}
+        </Hard>
+      </>
+    );
+  }
+  return (
+    <>
+      <Text style={styles.sys}>what I can&apos;t do</Text>
+      <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
+        <Text style={styles.bubbleText}>
+          {(result?.confidence?.basis || ['I could not price this piece.']).join(' ')}
+        </Text>
+      </Hard>
+    </>
   );
 }
 

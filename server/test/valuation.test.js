@@ -59,9 +59,10 @@ function syntheticSales(n = 400) {
     const medium = media[Math.floor(rand() * media.length)];
     const area = 200 + rand() * 8000;
     const year = 1920 + Math.floor(rand() * 80);
-    const title = i % 7 === 0 ? 'Campbell\'s Soup' : `Work ${i}`;
+    const isSoup = i % 7 === 0;
+    const title = isSoup ? 'Campbell\'s Soup' : `Work ${i}`;
     const price = a.base * Math.pow(area / 2000, 0.5) * (0.6 + rand() * 0.9);
-    rows.push(makeSale({ artist: a.slug, title, price, area, medium, year, id: i }));
+    rows.push(makeSale({ artist: a.slug, title, price, area, medium: isSoup ? 'lithograph print' : medium, year, id: i }));
   }
   return rows;
 }
@@ -116,12 +117,100 @@ test('edition match wins when two or more sales share artist + title', () => {
     artist: 'artist-a',
     title: 'Campbell\'s Soup',
     dimensions: '100 x 100 cm',
-    medium: 'print',
+    medium: 'lithograph print',
     year: '1965',
   });
   assert.equal(result.ok, true);
   assert.equal(result.method, 'edition');
   assert.ok(result.comps.length >= 2);
+});
+
+// ---------------------------------------------------------------------------
+// comp binding: a painting must never price from same-title prints
+// ---------------------------------------------------------------------------
+
+// One artist with a real market of million-dollar paintings plus a same-title
+// edition of cheap prints, the shape of the reported bug.
+function painterWithCheapPrintEdition() {
+  const rows = [];
+  let id = 0;
+  for (let i = 0; i < 160; i++) {
+    const area = 6000 + (i % 20) * 400;
+    const price = 900_000 * (1 + (i % 25) / 8);
+    rows.push(
+      makeSale({
+        artist: 'painter',
+        title: `Canvas ${i}`,
+        price,
+        area,
+        medium: 'acrylic on canvas',
+        year: 2000 + (i % 20),
+        id: id++,
+      }),
+    );
+  }
+  for (let i = 0; i < 16; i++) {
+    rows.push(
+      makeSale({
+        artist: 'painter',
+        title: 'Miss Spring',
+        price: 3500 + i * 400,
+        area: 640,
+        medium: 'digital pigment print',
+        year: 2012,
+        id: id++,
+      }),
+    );
+  }
+  for (const artist of ['other-a', 'other-b', 'other-c']) {
+    for (let i = 0; i < 120; i++) {
+      rows.push(
+        makeSale({
+          artist,
+          title: `Work ${i}`,
+          price: 4000 + (i % 30) * 1500,
+          area: 1500 + (i % 15) * 200,
+          medium: i % 3 === 0 ? 'acrylic on canvas' : 'lithograph print',
+          year: 1970 + (i % 30),
+          id: id++,
+        }),
+      );
+    }
+  }
+  return rows;
+}
+
+test('a painting does not bind to cheap same-title prints', () => {
+  const model = buildModel(painterWithCheapPrintEdition());
+  const result = estimate(model, {
+    artist: 'painter',
+    title: 'Miss Spring',
+    dimensions: '120 x 100 cm',
+    medium: 'acrylic on canvas',
+    year: '2012',
+  });
+  assert.equal(result.ok, true);
+  assert.notEqual(result.method, 'edition');
+  // Never the $8,000-$20,000 print range: the painting market is near $1M-$4M.
+  assert.ok(result.low > 200_000, `low ${result.low} should clear the print range`);
+  assert.ok(result.high <= 12_000_000, `high ${result.high} should stay near the painting comps`);
+  assert.ok(result.low <= 4_000_000 && result.high >= 1_000_000, `range ${result.low}-${result.high} should sit in the million-dollar comp set`);
+});
+
+test('a print edition still matches same-title, same-medium comps tightly', () => {
+  const model = buildModel(painterWithCheapPrintEdition());
+  const result = estimate(model, {
+    artist: 'painter',
+    title: 'Miss Spring',
+    medium: 'digital pigment print',
+    year: '2012',
+  });
+  assert.equal(result.method, 'edition');
+  assert.ok(result.low < result.high);
+  // The range stays inside the print edition and is materially tighter than the
+  // x4.3 residual band.
+  assert.ok(result.band < 4.3, `band ${result.band}`);
+  assert.ok(result.low >= 2000 && result.high <= 12_000, `print range ${result.low}-${result.high}`);
 });
 
 test('hedonic fallback for a title with no edition match', () => {

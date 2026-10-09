@@ -386,3 +386,79 @@ test('model refreshes after the throttle window elapses', async () => {
     db.close();
   }
 });
+
+test('malformed chat messages return 400', async () => {
+  const db = seededDb();
+  const app = createApp({ db, visionEnabled: () => false });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    assert.equal((await postJson(base, '/chat', { message: '   ' })).status, 400);
+    assert.equal((await postJson(base, '/chat', { message: 42 })).status, 400);
+    assert.equal((await postJson(base, '/chat', [1, 2, 3])).status, 400);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('a text-only chat message is answered and never runs the image path', async () => {
+  const db = seededDb();
+  const visionCalls = [];
+  const chatCalls = [];
+  const app = createApp({
+    db,
+    visionEnabled: () => true,
+    vision: async (args) => {
+      visionCalls.push(args);
+      return { identified: false, reason: 'should not run' };
+    },
+    chat: async (args) => {
+      chatCalls.push(args);
+      return { answer: 'A fair offer sits near the low end of the recorded sales.', source: 'model' };
+    },
+  });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { status, json } = await postJson(base, '/chat', {
+      message: 'What offer should I put down for this painting?',
+      identity: { artist: 'andy-warhol', title: "Campbell's Soup" },
+      value: { low: 1000, high: 5000, currency: 'USD' },
+    });
+    assert.equal(status, 200);
+    assert.equal(json.status, 'answered');
+    assert.match(json.answer, /offer/);
+    assert.equal(json.source, 'model');
+    assert.equal(visionCalls.length, 0);
+    assert.equal(chatCalls.length, 1);
+    assert.equal(chatCalls[0].message, 'What offer should I put down for this painting?');
+    // A chat answer is a reply, not a fresh appraisal.
+    assert.equal(json.value, undefined);
+    assert.equal(json.identity, undefined);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('chat falls back to a grounded answer when no model key is configured', async () => {
+  const db = seededDb();
+  const app = createApp({ db, visionEnabled: () => false });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { status, json } = await postJson(base, '/chat', {
+      message: 'What offer should I put down?',
+      identity: { artist: 'andy-warhol', title: "Campbell's Soup" },
+      value: { low: 1000, high: 5000, currency: 'USD' },
+    });
+    assert.equal(status, 200);
+    assert.equal(json.status, 'answered');
+    assert.equal(json.source, 'grounded');
+    assert.match(json.answer, /\$/);
+  } finally {
+    server.close();
+    db.close();
+  }
+});

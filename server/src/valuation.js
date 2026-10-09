@@ -3,8 +3,17 @@
 
 export const MEDIUM_CLASSES = ['print', 'photograph', 'sculpture', 'painting', 'work_on_paper', 'other'];
 export const MEDIUM_BASELINE = 'other';
-export const COVERAGE_LEVELS = [0.5, 0.8, 0.9];
-export const DEFAULT_COVERAGE = 0.8;
+export const COVERAGE_LEVELS = [0.5, 0.6, 0.8, 0.9];
+// The requester asked for a tighter, less conservative range. The displayed
+// range defaults to the central 60% of comparable sales rather than the wide
+// 80% residual band; the 80/90 levels stay available.
+export const DEFAULT_COVERAGE = 0.6;
+
+// Minimum comparable sales before the range is taken from the comps themselves.
+const MIN_COMPS = 8;
+const MAX_COMPS = 200;
+// Area windows tried in order; the first that yields enough comps wins.
+const COMP_AREA_FACTORS = [1.6, 3.16, 10, Infinity];
 
 // ---------------------------------------------------------------------------
 // parsing helpers
@@ -269,10 +278,17 @@ function buildCore(preparedRows) {
     artistByName.set(foldName(r.artist_slug), r.artist_slug);
   }
 
+  // Editions are repeat sales of the same printed work, so a comp must share
+  // the medium class too: a painting and a same-title print are different
+  // markets and must never bind to each other.
   const editionIndex = new Map();
+  const byArtistMedium = new Map();
   for (const r of rows) {
+    const mediumKey = `${r.artist_slug}|${r.medium_class}`;
+    if (!byArtistMedium.has(mediumKey)) byArtistMedium.set(mediumKey, []);
+    byArtistMedium.get(mediumKey).push(r);
     if (isGenericTitle(r.title_norm)) continue;
-    const key = `${r.artist_slug}|${r.title_norm}`;
+    const key = `${r.artist_slug}|${r.title_norm}|${r.medium_class}`;
     if (!editionIndex.has(key)) editionIndex.set(key, []);
     editionIndex.get(key).push(r);
   }
@@ -285,6 +301,7 @@ function buildCore(preparedRows) {
     defaultLogArea,
     defaultYear,
     editionIndex,
+    byArtistMedium,
     artistMedians: new Map(),
     beta: null,
     artistEffects: new Map(),
@@ -336,7 +353,7 @@ function prepareQuery(core, query = {}) {
 
 function predictCore(core, q) {
   const key = q.artist_slug && q.title_norm && !isGenericTitle(q.title_norm)
-    ? `${q.artist_slug}|${q.title_norm}`
+    ? `${q.artist_slug}|${q.title_norm}|${q.medium_class}`
     : null;
   if (key && core.editionIndex.has(key) && core.editionIndex.get(key).length >= 2) {
     const comps = core.editionIndex.get(key);
@@ -356,7 +373,43 @@ function predictCore(core, q) {
   return null;
 }
 
-const FALLBACK_BAND = { 0.5: 1.9, 0.8: 4.3, 0.9: 8.0 };
+const FALLBACK_BAND = { 0.5: 1.9, 0.6: 2.6, 0.8: 4.3, 0.9: 8.0 };
+// The raw spread of a comp set under-covers out of sample, so it is inflated by a
+// factor measured on the held-out split. These are the conservative defaults.
+const FALLBACK_COMP_INFLATION = { 0.5: 1.15, 0.6: 1.2, 0.8: 1.3, 0.9: 1.5 };
+
+// Comparable sales for a query, from an index so a large table stays cheap.
+// An edition uses its matched comps; otherwise the artist's sales in the same
+// medium class, starting from the closest areas and widening until enough.
+function comparableSales(core, q, prediction) {
+  if (prediction.method === 'edition') return { comps: prediction.comps, source: 'edition' };
+  if (!q.artist_slug || !core.byArtistMedium) return { comps: [], source: 'none' };
+  const pool = core.byArtistMedium.get(`${q.artist_slug}|${q.medium_class}`) || [];
+  if (!pool.length) return { comps: [], source: 'none' };
+  const area = Number.isFinite(q.area_cm2) && q.area_cm2 > 0 ? q.area_cm2 : null;
+  for (const factor of COMP_AREA_FACTORS) {
+    let comps = pool;
+    if (area && Number.isFinite(factor)) {
+      const f = Math.log(factor);
+      comps = pool.filter(
+        (r) => Number.isFinite(r.area_cm2) && r.area_cm2 > 0 && Math.abs(Math.log10(r.area_cm2 / area)) <= f,
+      );
+    }
+    if (comps.length >= MIN_COMPS || factor === Infinity) {
+      return { comps: comps.slice(0, MAX_COMPS), source: comps.length ? 'comps' : 'none' };
+    }
+  }
+  return { comps: [], source: 'none' };
+}
+
+// Half-width in log10 space for one prediction: the empirical spread of its
+// comparable sales when there are enough, else the calibrated residual band.
+function compResidualsFor(core, q, prediction) {
+  const { comps, source } = comparableSales(core, q, prediction);
+  const minComps = source === 'edition' ? 2 : MIN_COMPS;
+  if (comps.length < minComps) return null;
+  return { source, residuals: comps.map((c) => Math.abs(c.logPrice - prediction.log10)) };
+}
 
 // Build a model from raw sale rows and calibrate band multipliers on a held-out split.
 export function buildModel(sales = []) {
@@ -364,6 +417,7 @@ export function buildModel(sales = []) {
   const core = buildCore(prepared);
 
   let band = { ...FALLBACK_BAND };
+  let compInflation = { ...FALLBACK_COMP_INFLATION };
   let coverage = null;
 
   const evalRows = prepared.filter((_, i) => i % 5 === 4);
@@ -383,24 +437,51 @@ export function buildModel(sales = []) {
       for (const level of COVERAGE_LEVELS) band[level] = Math.pow(10, quantile(calResiduals, level));
     }
 
-    const evalResiduals = [];
+    // Inflate the comp spread so it covers out-of-sample sales at the stated level.
+    const calComps = [];
+    for (const r of calRows) {
+      const p = predictCore(trainCore, r);
+      if (!p) continue;
+      const comp = compResidualsFor(trainCore, r, p);
+      if (comp) calComps.push({ residual: Math.abs(r.logPrice - p.log10), comp });
+    }
+    if (calComps.length >= 10) {
+      compInflation = {};
+      for (const level of COVERAGE_LEVELS) {
+        const ratios = calComps.map((e) => {
+          const base = quantile(e.comp.residuals, level);
+          return base > 0 ? e.residual / base : 1;
+        });
+        compInflation[level] = Math.max(1, quantile(ratios, level));
+      }
+    }
+
+    const evalPreds = [];
     for (const r of evalRows) {
       const p = predictCore(trainCore, r);
-      if (p) evalResiduals.push(Math.abs(r.logPrice - p.log10));
+      if (!p) continue;
+      const comp = compResidualsFor(trainCore, r, p);
+      evalPreds.push({ residual: Math.abs(r.logPrice - p.log10), comp });
     }
-    if (evalResiduals.length >= 10) {
+    if (evalPreds.length >= 10) {
       coverage = {};
       for (const level of COVERAGE_LEVELS) {
-        const halfLog = Math.log10(band[level]);
-        coverage[level] = evalResiduals.filter((r) => r <= halfLog).length / evalResiduals.length;
+        let covered = 0;
+        for (const e of evalPreds) {
+          const halfLog = e.comp
+            ? quantile(e.comp.residuals, level) * compInflation[level]
+            : Math.log10(band[level]);
+          if (e.residual <= halfLog) covered++;
+        }
+        coverage[level] = covered / evalPreds.length;
       }
     }
   }
 
-  return { ...core, band, coverage, count: prepared.length, prepared };
+  return { ...core, band, compInflation, coverage, count: prepared.length, prepared };
 }
 
-const COVERAGE_NAMES = { 0.5: 'low', 0.8: 'medium', 0.9: 'high' };
+const COVERAGE_NAMES = { 0.5: 'low', 0.6: 'medium', 0.8: 'high', 0.9: 'very high' };
 
 // Estimate a value for `query` against `model`. Returns {ok:false} when nothing supports it.
 export function estimate(model, query = {}, { coverage = DEFAULT_COVERAGE } = {}) {
@@ -413,9 +494,16 @@ export function estimate(model, query = {}, { coverage = DEFAULT_COVERAGE } = {}
     return { ok: false, reason: 'no comparable sales and no usable model' };
   }
 
-  const level = model.band[coverage] != null ? coverage : DEFAULT_COVERAGE;
-  const multiplier = model.band[level];
-  const halfLog = Math.log10(multiplier);
+  const level = COVERAGE_LEVELS.includes(coverage) ? coverage : DEFAULT_COVERAGE;
+
+  // Prefer the actual comparable sales for the range: it is both tighter and
+  // grounded in the evidence the user is shown. Fall back to the calibrated
+  // residual band when there are too few comps.
+  const comp = compResidualsFor(model, q, prediction);
+  const inflation = model.compInflation?.[level] ?? FALLBACK_COMP_INFLATION[level] ?? 1;
+  const halfLog = comp
+    ? quantile(comp.residuals, level) * inflation
+    : Math.log10(model.band[level]);
 
   const predicted = Math.pow(10, prediction.log10);
   const low = Math.pow(10, prediction.log10 - halfLog);
@@ -428,7 +516,9 @@ export function estimate(model, query = {}, { coverage = DEFAULT_COVERAGE } = {}
     predicted,
     low,
     high,
-    band: multiplier,
+    band: Math.pow(10, halfLog),
+    bandSource: comp ? 'comps' : 'model',
+    comparableCount: comp ? comp.residuals.length : (prediction.comps?.length || 0),
     coverage: level,
     levelName: COVERAGE_NAMES[level] || 'medium',
     comps: prediction.comps,
