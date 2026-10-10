@@ -18,7 +18,8 @@
       "bundleIdentifier": "com.thecollector.app"
     },
     "android": {
-      "package": "com.thecollector.app",
+      "package": "com.mobile.thecollector",
+      "versionCode": 2,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#111111"
