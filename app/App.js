@@ -117,6 +117,22 @@ function formatMoney(value, currency = 'USD') {
   return symbol + n.toLocaleString('en-US');
 }
 
+// A 0..1 percentile as an ordinal, e.g. 0.6 -> "60th".
+function formatPercentile(value) {
+  const pct = Math.round((Number(value) || 0) * 100);
+  const mod100 = pct % 100;
+  const mod10 = pct % 10;
+  const suffix =
+    mod10 === 1 && mod100 !== 11
+      ? 'st'
+      : mod10 === 2 && mod100 !== 12
+        ? 'nd'
+        : mod10 === 3 && mod100 !== 13
+          ? 'rd'
+          : 'th';
+  return `${pct}${suffix}`;
+}
+
 async function assetFromResult(result) {
   if (result.canceled || !result.assets?.length) return null;
   const asset = result.assets[0];
@@ -863,6 +879,7 @@ function AppraisalTurn({ result }) {
         <Text style={styles.sys}>what I can see</Text>
         <IdentityBubble identity={result.identity} />
         <PriceCard result={result} />
+        <PositioningCard positioning={result.positioning} />
         {origin ? <TextCard label="where it came from" body={origin} /> : null}
         {provenance.length || sources.length ? (
           <ProvenanceCard provenance={provenance} sources={sources} />
@@ -946,6 +963,44 @@ function PriceCard({ result }) {
         </View>
       ))}
     </Hard>
+  );
+}
+
+// Where the work sits inside the artist's own recorded output. The server owns
+// the numbers; this card only repeats them, and only when a percentile survived
+// the minimum-sample guard. It never changes the price above it.
+function PositioningCard({ positioning }) {
+  if (!positioning?.available || !positioning.percentiles) return null;
+  const entries = [
+    ['medium', positioning.percentiles.medium],
+    ['image size', positioning.percentiles.size],
+    ['creation year', positioning.percentiles.year],
+    ['edition', positioning.percentiles.edition],
+  ].filter(([, pct]) => typeof pct === 'number');
+  if (!entries.length) return null;
+  const works = `from ${positioning.sampleSize} recorded work${
+    positioning.sampleSize === 1 ? '' : 's'
+  }`;
+  return (
+    <>
+      <Text style={styles.sys}>where it sits in the artist&apos;s output</Text>
+      <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
+        {entries.map(([label, pct]) => (
+          <View key={label} style={styles.similarRow}>
+            <Text style={[styles.cardLine, styles.similarName]}>{label}</Text>
+            <Text style={styles.similarPrice}>{formatPercentile(pct)} percentile</Text>
+          </View>
+        ))}
+        <Text testID="positioning-sample" style={styles.cardLine}>
+          {works}
+        </Text>
+        {(positioning.basis || []).map((line, index) => (
+          <Text key={index} style={styles.cardLine}>
+            {line}
+          </Text>
+        ))}
+      </Hard>
+    </>
   );
 }
 
