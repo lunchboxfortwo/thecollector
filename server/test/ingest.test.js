@@ -1,13 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  artistSignalsCount,
+  getArtistSignals,
   getIngestState,
   ingestArtistCounts,
   markIngestArtist,
   openDb,
   salesCount,
 } from '../src/db.js';
-import { fetchArtistSales, fetchArtistsPage, ingestAll, ingestAllFull } from '../src/artsy.js';
+import {
+  fetchArtistSales,
+  fetchArtistsPage,
+  ingestAll,
+  ingestAllFull,
+  ingestSignals,
+} from '../src/artsy.js';
 
 // ---------------------------------------------------------------------------
 // fake Artsy client
@@ -29,8 +37,16 @@ function lot(id, cents) {
 
 // `pages` is keyed by cursor (null for the first page). A `node: null` entry models the bad
 // catalog rows Artsy returns alongside a GraphQL non-null error.
-function makeClient({ pages = [], lots = {}, failListCursors = new Set(), failArtistSlugs = new Set() } = {}) {
-  const calls = { lists: [], artists: [] };
+function makeClient({
+  pages = [],
+  lots = {},
+  failListCursors = new Set(),
+  failArtistSlugs = new Set(),
+  signalCounts = {},
+  signalShows = {},
+  failSignalSlugs = new Set(),
+} = {}) {
+  const calls = { lists: [], artists: [], signals: [] };
   const gqlImpl = async (query, variables) => {
     if (query.includes('artistsConnection(')) {
       const cursor = variables.cursor ?? null;
@@ -59,6 +75,16 @@ function makeClient({ pages = [], lots = {}, failListCursors = new Set(), failAr
           },
         },
       };
+    }
+    if (query.includes('counts { follows')) {
+      calls.signals.push(variables.slug);
+      if (failSignalSlugs.has(variables.slug)) throw new Error(`signals ${variables.slug} exploded`);
+      const counts = signalCounts[variables.slug] ?? { follows: 0, articles: 0, shows: 0 };
+      return { artist: { name: `Name ${variables.slug}`, counts } };
+    }
+    if (query.includes('showsConnection')) {
+      const nodes = signalShows[variables.slug] ?? [];
+      return { artist: { showsConnection: { edges: nodes.map((node) => ({ node })) } } };
     }
     throw new Error('unexpected query');
   };
@@ -227,5 +253,100 @@ test('full ingest retries artists that failed on a previous run', async () => {
   assert.deepEqual(retry.calls.artists, ['c']);
   assert.equal(ingestArtistCounts(db).failed, 0);
   assert.equal(salesCount(db), 6);
+  db.close();
+});
+
+// ---------------------------------------------------------------------------
+// momentum signals ingest (acceptance criterion 7)
+// ---------------------------------------------------------------------------
+
+const SIGNAL_CATALOG = [
+  {
+    cursor: null,
+    endCursor: null,
+    hasNextPage: false,
+    artists: [
+      { slug: 'auctioned', name: 'Auctioned', counts: { auctionResults: 2, shows: 4, articles: 1 } },
+      { slug: 'emerging', name: 'Emerging', counts: { auctionResults: 0, shows: 12, articles: 9 } },
+      { slug: 'quiet', name: 'Quiet', counts: { auctionResults: 0, shows: 0, articles: 0 } },
+    ],
+  },
+];
+
+const SIGNAL_NOW = new Date('2025-06-01T00:00:00.000Z');
+
+function signalClient(extra = {}) {
+  return makeClient({
+    signalCounts: {
+      auctioned: { follows: 1200, articles: 4, shows: 4 },
+      emerging: { follows: 800, articles: 9, shows: 12 },
+    },
+    signalShows: {
+      auctioned: [
+        { startAt: '2024-01-01T00:00:00.000Z', isSolo: true, partner: { name: 'Blue', categories: ['blue-chip'] } },
+      ],
+      emerging: [
+        { startAt: '2024-02-01T00:00:00.000Z', isSolo: true, partner: { name: 'Est', categories: ['established'] } },
+        { startAt: '2023-05-01T00:00:00.000Z', isSolo: false, partner: { name: 'Eme', categories: ['emerging'] } },
+      ],
+    },
+    ...extra,
+  });
+}
+
+test('signals ingest stores zero-auction artists and resumes from the queue', async () => {
+  const db = openDb(':memory:');
+  const catalog = makeClient({ pages: SIGNAL_CATALOG, lots: { auctioned: [lot(1, 100000)] } });
+  const sales = await ingestAllFull({ db, gqlImpl: catalog.gqlImpl, retries: 0, log: () => {} });
+  assert.equal(sales.discovered, 2, 'only artists with a signal are queued');
+  assert.equal(sales.artistsIngested, 1, 'only the auctioned artist has sales to fetch');
+  assert.equal(salesCount(db), 1);
+
+  const client = signalClient();
+  // Bounded runs of one artist each, then resume until the queue is empty.
+  const first = await ingestSignals({ db, maxArtists: 1, gqlImpl: client.gqlImpl, retries: 0, log: () => {}, now: SIGNAL_NOW });
+  assert.equal(first.stored, 1);
+  assert.equal(first.pending, 1);
+  const second = await ingestSignals({ db, maxArtists: 1, gqlImpl: client.gqlImpl, retries: 0, log: () => {}, now: SIGNAL_NOW });
+  assert.equal(second.stored, 1);
+  assert.equal(second.pending, 0);
+  const third = await ingestSignals({ db, maxArtists: 1, gqlImpl: client.gqlImpl, retries: 0, log: () => {}, now: SIGNAL_NOW });
+  assert.equal(third.attempted, 0, 'a finished queue does no work');
+  assert.equal(artistSignalsCount(db), 2);
+
+  const emerging = getArtistSignals(db, 'emerging');
+  assert.ok(emerging, 'the zero-auction artist is stored');
+  assert.equal(emerging.artist_slug, 'emerging');
+  assert.equal(emerging.shows_total, 12);
+  assert.equal(emerging.shows_36mo, 2);
+  assert.equal(emerging.solo_36mo, 1);
+  assert.equal(emerging.group_36mo, 1);
+  assert.equal(emerging.gallery_count, 2);
+  assert.equal(emerging.best_gallery_tier, 'B');
+  assert.equal(emerging.articles_total, 9);
+
+  // A refresh overwrites the same row instead of duplicating it.
+  await ingestSignals({ db, gqlImpl: signalClient({}).gqlImpl, retries: 0, log: () => {}, now: SIGNAL_NOW });
+  assert.equal(artistSignalsCount(db), 2);
+  db.close();
+});
+
+test('signals ingest retries artists that failed on a previous run', async () => {
+  const db = openDb(':memory:');
+  const catalog = makeClient({ pages: SIGNAL_CATALOG, lots: {} });
+  await ingestAllFull({ db, gqlImpl: catalog.gqlImpl, retries: 0, log: () => {} });
+
+  const failing = signalClient({ failSignalSlugs: new Set(['emerging']) });
+  const run1 = await ingestSignals({ db, gqlImpl: failing.gqlImpl, retries: 0, log: () => {}, now: SIGNAL_NOW });
+  assert.equal(run1.stored, 1);
+  assert.equal(run1.failed, 1);
+  assert.equal(run1.queueFailed, 1);
+  assert.equal(getArtistSignals(db, 'emerging'), null);
+
+  const good = signalClient();
+  const run2 = await ingestSignals({ db, gqlImpl: good.gqlImpl, retries: 0, log: () => {}, now: SIGNAL_NOW });
+  assert.equal(run2.failed, 0);
+  assert.equal(run2.queueFailed, 0);
+  assert.ok(getArtistSignals(db, 'emerging'));
   db.close();
 });

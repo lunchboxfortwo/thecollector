@@ -10,6 +10,10 @@ import {
   normalizeTitle,
   parseAreaCm2,
   parseYear,
+  recencyWeight,
+  MAX_HALF_LOG,
+  RECENCY_FLOOR,
+  DEFAULT_COVERAGE,
   MEDIUM_BASELINE,
   MEDIUM_CLASSES,
 } from '../src/valuation.js';
@@ -305,7 +309,18 @@ function denseSolve(A, b) {
 }
 
 function denseFit(sales) {
-  const rows = sales.map((r) => ({ ...r, logPrice: Math.log10(r.price_cents / 100) }));
+  // Same recency weighting the production fixed-effects fit uses, so the two
+  // parameterisations still produce identical fitted prices.
+  const rows = sales.map((r) => ({
+    ...r,
+    sale_year: r.sale_year != null ? Number(r.sale_year) : parseYear(r.sale_date),
+    logPrice: Math.log10(r.price_cents / 100),
+  }));
+  const saleYears = rows.map((r) => r.sale_year).filter((v) => Number.isFinite(v));
+  const asOfYear = saleYears.length
+    ? saleYears.reduce((m, v) => Math.max(m, v), -Infinity)
+    : new Date().getFullYear();
+  const weights = rows.map((r) => recencyWeight(r.sale_year, asOfYear));
   const areas = rows.map((r) => r.area_cm2).filter((v) => Number.isFinite(v) && v > 0);
   const years = rows.map((r) => r.creation_year).filter((v) => Number.isFinite(v) && v > 1500 && v < 2100);
   const defaultLogArea = areas.length ? Math.log10(denseMedian(areas)) : Math.log10(1000);
@@ -328,9 +343,10 @@ function denseFit(sales) {
   const XtX = Array.from({ length: p }, () => new Array(p).fill(0));
   const Xty = new Array(p).fill(0);
   for (let i = 0; i < X.length; i++) {
+    const w = weights[i];
     for (let a = 0; a < p; a++) {
-      Xty[a] += X[i][a] * y[i];
-      for (let b = 0; b < p; b++) XtX[a][b] += X[i][a] * X[i][b];
+      Xty[a] += w * X[i][a] * y[i];
+      for (let b = 0; b < p; b++) XtX[a][b] += w * X[i][a] * X[i][b];
     }
   }
   for (let a = 0; a < p; a++) XtX[a][a] += 1e-6;
@@ -359,7 +375,9 @@ test('fixed-effects fit reproduces the dense dummy-variable prices', () => {
     const got = estimate(model, query);
     assert.equal(got.method, 'hedonic');
     const want = denseDot(dense.featureRow(got.query), dense.beta);
-    const gotLog10 = Math.log10(got.predicted);
+    // The fitted level (before the sale-year trend projection) is the hedonic
+    // fixed-effects price the dense design must reproduce.
+    const gotLog10 = got.baseLog10;
     assert.ok(
       Math.abs(gotLog10 - want) < 1e-6,
       `${query.artist}: fixed effects ${gotLog10} vs dense ${want}`,
@@ -379,9 +397,109 @@ test('fixed-effects fit reproduces the dense dummy-variable prices', () => {
     dense.artists.reduce((sum, artist) => sum + denseDot(dense.featureRow({ ...unknown.query, artist_slug: artist }), dense.beta), 0) /
     dense.artists.length;
   assert.ok(
-    Math.abs(Math.log10(unknown.predicted) - pooled) < 1e-6,
-    `pooled: fixed effects ${Math.log10(unknown.predicted)} vs dense ${pooled}`,
+    Math.abs(unknown.baseLog10 - pooled) < 1e-6,
+    `pooled: fixed effects ${unknown.baseLog10} vs dense ${pooled}`,
   );
+});
+
+// ---------------------------------------------------------------------------
+// recency weighting, trend and the ±10% cap
+// ---------------------------------------------------------------------------
+
+function trendingSales(n = 120) {
+  const rows = [];
+  for (let i = 0; i < n; i++) {
+    const saleYear = 2000 + Math.floor(i / 10);
+    const price = 1000 * Math.pow(1.08, saleYear - 2000);
+    const row = makeSale({
+      artist: 'trend-artist',
+      title: `Work ${i}`,
+      price,
+      area: 1000,
+      medium: 'oil on canvas',
+      year: 1950,
+      id: i,
+    });
+    row.sale_date = `${saleYear}-06-01T00:00:00.000Z`;
+    rows.push(row);
+  }
+  return rows;
+}
+
+test('recent sales are weighted more heavily than old ones', () => {
+  assert.ok(recencyWeight(2020, 2020) > recencyWeight(1990, 2020));
+  assert.ok(recencyWeight(2014, 2020) > recencyWeight(1990, 2020));
+  // Six-year half-life: a sale six years old counts half as much.
+  assert.ok(Math.abs(recencyWeight(2014, 2020) - 0.5) < 1e-9);
+  // A sale from 130 years ago is floored, not zeroed.
+  assert.equal(recencyWeight(1893, 2020), RECENCY_FLOOR);
+});
+
+test('buildModel exposes a clamped sale-year trend slope', () => {
+  const model = buildModel(trendingSales(120));
+  assert.ok(model.trend, 'trend should be exposed on the model');
+  assert.equal(typeof model.trend.slope, 'number');
+  assert.ok(model.trend.slope > 0.005, `slope ${model.trend.slope} should be positive`);
+  assert.ok(model.trend.slope <= 0.05 + 1e-9, `slope ${model.trend.slope} should be clamped`);
+});
+
+test('a same-work estimate is pulled toward the recent sale, not the old one', () => {
+  const rows = [
+    makeSale({ artist: 'trendy', title: 'Blue', price: 1000, area: 1000, medium: 'lithograph print', year: 1990, id: 1 }),
+    makeSale({ artist: 'trendy', title: 'Blue', price: 5000, area: 1000, medium: 'lithograph print', year: 2020, id: 2 }),
+  ];
+  const model = buildModel(rows);
+  const result = estimate(model, { artist: 'trendy', title: 'Blue', medium: 'lithograph print' });
+  assert.equal(result.method, 'edition');
+  // The plain midpoint of $1,000 and $5,000 is $3,000; recency weighting must
+  // land clearly closer to the $5,000 sale.
+  assert.ok(result.predicted > 4000, `predicted ${result.predicted} should lean to the recent sale`);
+});
+
+test('the displayed range never exceeds ±10% of the central estimate', () => {
+  const fixtures = [
+    {
+      model: buildModel(syntheticSales(400)),
+      queries: [
+        { artist: 'artist-a', title: 'Unique One', dimensions: '120 x 90 cm', medium: 'oil on canvas', year: '1950' },
+        { artist: 'artist-b', title: 'Unique Two', dimensions: '50 x 40 cm', medium: 'print', year: '1930' },
+        { artist: 'Nobody At All', title: 'Unique Three', dimensions: '50 x 40 cm', medium: 'other', year: '1970' },
+      ],
+    },
+    {
+      model: buildModel(painterWithCheapPrintEdition()),
+      queries: [
+        { artist: 'painter', title: 'Miss Spring', dimensions: '120 x 100 cm', medium: 'acrylic on canvas', year: '2012' },
+      ],
+    },
+  ];
+  let cappedSeen = false;
+  for (const { model, queries } of fixtures) {
+    for (const query of queries) {
+      const result = estimate(model, query);
+      assert.equal(result.ok, true);
+      assert.ok(
+        result.low >= result.predicted * 0.9 - 1e-9,
+        `low ${result.low} vs predicted ${result.predicted}`,
+      );
+      assert.ok(
+        result.high <= result.predicted * 1.1 * (1 + 1e-12),
+        `high ${result.high} vs predicted ${result.predicted}`,
+      );
+      assert.ok(result.band <= Math.pow(10, MAX_HALF_LOG) + 1e-9, `band ${result.band}`);
+      if (result.capped) cappedSeen = true;
+    }
+  }
+  assert.ok(cappedSeen, 'the wide painter fixture should hit the ±10% cap');
+});
+
+test('prints empirical coverage of the capped range', () => {
+  const model = buildModel(syntheticSales(400));
+  assert.ok(model.cappedCoverage != null, 'capped coverage should be computed');
+  console.log(`[capped coverage synthetic] ${(model.cappedCoverage * 100).toFixed(1)}%`);
+  assert.ok(model.cappedCoverage >= 0 && model.cappedCoverage <= 1);
+  // The cap is deliberately narrower than the nominal 60% spread.
+  assert.ok(model.cappedCoverage <= model.coverage[DEFAULT_COVERAGE] + 1e-9);
 });
 
 // ---------------------------------------------------------------------------

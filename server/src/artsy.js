@@ -1,13 +1,19 @@
 // Artsy internal GraphQL client + ingest. No auth; sequential and polite.
 import {
+  getArtistSignals,
   getIngestState,
   ingestArtistCounts,
   insertSales,
   markIngestArtist,
+  markSignalArtist,
   nextPendingIngestArtist,
+  nextPendingSignalArtist,
   resetFailedIngestArtists,
+  resetFailedSignalArtists,
   salesCount,
   setIngestState,
+  signalArtistCounts,
+  upsertArtistSignals,
   upsertIngestArtists,
 } from './db.js';
 import { classifyMedium, normalizeTitle, parseAreaCm2, parseYear } from './valuation.js';
@@ -61,7 +67,7 @@ query ($cursor: String, $first: Int!) {
       node {
         slug
         name
-        counts { auctionResults }
+        counts { auctionResults shows articles }
       }
     }
   }
@@ -182,6 +188,8 @@ export async function fetchArtistsPage({ cursor = null, first = 100, gqlImpl = g
       slug: node.slug,
       name: node.name ?? null,
       auctionResults: Number(node.counts?.auctionResults ?? 0),
+      shows: Number(node.counts?.shows ?? 0),
+      articles: Number(node.counts?.articles ?? 0),
     }));
   return {
     artists,
@@ -234,18 +242,24 @@ export async function ingestAllFull({ db, first = 100, maxPages = Infinity, log 
         break;
       }
 
-      const withResults = page.artists.filter((artist) => artist.auctionResults > 0);
-      discovered += withResults.length;
+      // Queue any artist with a signal: auction results, exhibitions or press. Artists with no
+      // auction results have no sales to fetch but still need momentum enrichment.
+      const signaled = page.artists.filter(
+        (artist) => artist.auctionResults > 0 || artist.shows > 0 || artist.articles > 0,
+      );
+      discovered += signaled.length;
       upsertIngestArtists(
         db,
-        withResults.map((artist) => ({
+        signaled.map((artist) => ({
           artist_slug: artist.slug,
           artist_name: artist.name,
           auction_results: artist.auctionResults,
+          shows: artist.shows,
+          articles: artist.articles,
         })),
       );
       log(
-        `Discovered ${withResults.length} artist(s) with auction results on this page (${page.artists.length} scanned; +${Math.round((Date.now() - startedAt) / 1000)}s).`,
+        `Discovered ${signaled.length} artist(s) with a signal on this page (${page.artists.length} scanned; +${Math.round((Date.now() - startedAt) / 1000)}s).`,
       );
 
       // Save discovery progress before the (possibly long) drain so a stop never loses it.
@@ -291,5 +305,177 @@ export async function ingestAllFull({ db, first = 100, maxPages = Infinity, log 
     done: counts.done,
     failed: counts.failed,
     elapsedMs: Date.now() - startedAt,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Artist momentum signals
+// ---------------------------------------------------------------------------
+
+// Artsy's own data is the v1 source: follows/ articles/ shows counts plus the
+// artist's shows, which carry dates and partner tiers. The adapter is deliberately
+// tolerant: if the connection schema is unavailable the counts still land.
+export const SIGNALS_COUNTS_QUERY = `
+query ($slug: String!) {
+  artist(id: $slug) {
+    name
+    counts { follows articles shows }
+  }
+}`;
+
+export const SIGNALS_SHOWS_QUERY = `
+query ($slug: String!) {
+  artist(id: $slug) {
+    showsConnection(first: 50) {
+      edges {
+        node {
+          startAt
+          isSolo
+          partner { name categories }
+        }
+      }
+    }
+  }
+}`;
+
+// Fallback for a schema without `isSolo`; grouping every show understates the
+// exhibition signal but keeps the ingest working.
+export const SIGNALS_SHOWS_BASIC_QUERY = `
+query ($slug: String!) {
+  artist(id: $slug) {
+    showsConnection(first: 50) {
+      edges {
+        node {
+          startAt
+          partner { name categories }
+        }
+      }
+    }
+  }
+}`;
+
+const TIER_RANK = { A: 3, B: 2, C: 1 };
+
+// Map a partner's categories to a venue tier. Blue-chip or museum partners are
+// A, established B, emerging C; anything else is left unknown.
+export function partnerTier(categories) {
+  const cats = (categories ?? []).map((c) => String(c).toLowerCase());
+  if (cats.some((c) => c.includes('blue-chip') || c.includes('blue chip') || c.includes('museum'))) return 'A';
+  if (cats.some((c) => c.includes('established'))) return 'B';
+  if (cats.some((c) => c.includes('emerging'))) return 'C';
+  return null;
+}
+
+function betterTier(a, b) {
+  return (TIER_RANK[a] ?? 0) >= (TIER_RANK[b] ?? 0) ? a : b;
+}
+
+function monthsBefore(now, months) {
+  const d = new Date(now.getTime());
+  d.setUTCMonth(d.getUTCMonth() - months);
+  return d.getTime();
+}
+
+// A 90-day delta is only claimed when the previous snapshot is recent enough to
+// mean it; otherwise the growth term is left at zero.
+function followersDelta(previous, follows, now) {
+  if (!previous || previous.follows == null) return 0;
+  const fetchedAt = Date.parse(previous.fetched_at ?? '');
+  if (!Number.isFinite(fetchedAt)) return 0;
+  const ageDays = (now.getTime() - fetchedAt) / 86_400_000;
+  if (ageDays > 120) return 0;
+  return Math.max(0, follows - Number(previous.follows));
+}
+
+// Reduce one artist's counts and shows to the stored signal row.
+export function signalsFromGraph({ artist, name, counts = {}, shows = [], previous = null, now = new Date() }) {
+  const asOf = now.toISOString();
+  const cutoff36 = monthsBefore(now, 36);
+  let shows36 = 0;
+  let solo36 = 0;
+  let group36 = 0;
+  let bestTier = null;
+  const galleries = new Set();
+  for (const node of shows) {
+    if (!node) continue;
+    if (node.partner?.name) galleries.add(node.partner.name);
+    bestTier = betterTier(bestTier, partnerTier(node.partner?.categories));
+    const started = Date.parse(node.startAt ?? node.start_at ?? '');
+    if (!Number.isFinite(started) || started < cutoff36) continue;
+    shows36++;
+    if (node.isSolo === true || node.is_solo === true) solo36++;
+    else group36++;
+  }
+  const follows = Number(counts.follows ?? 0);
+  return {
+    artist_slug: artist.slug,
+    artist_name: name ?? artist.name ?? null,
+    as_of: asOf,
+    follows,
+    shows_total: Number(counts.shows ?? shows.length),
+    shows_36mo: shows36,
+    solo_36mo: solo36,
+    group_36mo: group36,
+    gallery_count: galleries.size,
+    best_gallery_tier: bestTier,
+    articles_total: Number(counts.articles ?? 0),
+    // v1 has no per-article dates, so the trailing window falls back to the total.
+    articles_24mo: Number(counts.articles ?? 0),
+    press_tier: null,
+    followers_delta_90d: followersDelta(previous, follows, now),
+    source: 'artsy',
+    fetched_at: asOf,
+  };
+}
+
+// Fetch one artist's momentum signals. Counts are required; the shows connection
+// is best-effort and never sinks the row.
+export async function fetchArtistSignals(artist, { gqlImpl = gql, retries = 3, log = () => {}, now = new Date(), previous = null } = {}) {
+  const countsData = await gqlWithRetry(SIGNALS_COUNTS_QUERY, { slug: artist.slug }, { gqlImpl, retries });
+  const node = countsData?.artist;
+  const counts = node?.counts ?? {};
+  let shows = [];
+  try {
+    const showData = await gqlWithRetry(SIGNALS_SHOWS_QUERY, { slug: artist.slug }, { gqlImpl, retries });
+    shows = (showData?.artist?.showsConnection?.edges ?? []).map((e) => e?.node).filter(Boolean);
+  } catch (err) {
+    try {
+      const basic = await gqlWithRetry(SIGNALS_SHOWS_BASIC_QUERY, { slug: artist.slug }, { gqlImpl, retries });
+      shows = (basic?.artist?.showsConnection?.edges ?? []).map((e) => e?.node).filter(Boolean);
+    } catch (err2) {
+      log(`  ! signals ${artist.slug}: shows unavailable (${err2.message}); using counts only`);
+    }
+  }
+  return signalsFromGraph({ artist, name: node?.name, counts, shows, previous, now });
+}
+
+// Drain pending signal artists, bounded per run. Per-artist signal_status is the
+// checkpoint, so a stop leaves finished work finished and a rerun resumes.
+export async function ingestSignals({ db, maxArtists = Infinity, gqlImpl = gql, retries = 3, log = console.log, now = new Date() } = {}) {
+  const requeued = resetFailedSignalArtists(db);
+  if (requeued) log(`Requeued ${requeued} artist(s) whose signals failed on a previous run.`);
+  const stats = { attempted: 0, stored: 0, failed: 0 };
+  for (let i = 0; i < maxArtists; i++) {
+    const artist = nextPendingSignalArtist(db);
+    if (!artist) break;
+    stats.attempted++;
+    try {
+      const previous = getArtistSignals(db, artist.slug);
+      const signals = await fetchArtistSignals(artist, { gqlImpl, retries, log, now, previous });
+      upsertArtistSignals(db, [signals]);
+      markSignalArtist(db, artist.slug, 'done');
+      stats.stored++;
+    } catch (err) {
+      log(`  ! signals ${artist.slug} failed: ${err.message}`);
+      markSignalArtist(db, artist.slug, 'failed', err.message);
+      stats.failed++;
+    }
+  }
+  const counts = signalArtistCounts(db);
+  return {
+    ...stats,
+    pending: counts.pending,
+    queueDone: counts.done,
+    queueFailed: counts.failed,
   };
 }
