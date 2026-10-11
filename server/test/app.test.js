@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openDb, insertSales } from '../src/db.js';
+import { readFileSync } from 'node:fs';
+import { openDb, insertSales, upsertArtistSignals } from '../src/db.js';
 import { createApp } from '../src/index.js';
 import { classifyMedium, normalizeTitle } from '../src/valuation.js';
 
@@ -133,6 +134,57 @@ test('resubmitting hints returns a priced range with coverage', async () => {
     assert.ok(json.confidence.basis.length > 0);
     assert.ok(Array.isArray(json.provenance));
     assert.ok(Array.isArray(json.similar));
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('a zero-auction artist is priced from momentum and no source is named', async () => {
+  const db = seededDb();
+  upsertArtistSignals(db, [
+    {
+      artist_slug: 'emerging-artist',
+      artist_name: 'Emerging Artist',
+      follows: 5000,
+      shows_total: 10,
+      shows_36mo: 8,
+      solo_36mo: 4,
+      group_36mo: 4,
+      gallery_count: 5,
+      best_gallery_tier: 'B',
+      articles_total: 20,
+      articles_24mo: 10,
+      press_tier: 'B',
+    },
+  ]);
+  const app = createApp({ db, visionEnabled: () => false });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { status, json } = await postJson(base, '/appraise', {
+      hints: {
+        artist: 'Emerging Artist',
+        medium: 'print',
+        size: '100 x 100 cm',
+        year: '2015',
+        country: 'Japan',
+      },
+    });
+    assert.equal(status, 200);
+    assert.equal(json.status, 'priced');
+    assert.equal(json.confidence.level, 'momentum');
+    assert.equal(json.confidence.coverage, null);
+    assert.ok(
+      json.confidence.basis.some((line) => line.toLowerCase().includes('momentum')),
+      `expected a momentum basis line, got:\n${json.confidence.basis.join('\n')}`,
+    );
+    assert.ok(json.confidence.basis.includes('coverage: unavailable'));
+    const { low, high } = json.value;
+    const mid = (low + high) / 2;
+    assert.ok(low >= mid * 0.9 - 1e-6 && high <= mid * 1.1 + 1e-6, `range ${low}-${high} mid ${mid}`);
+    assert.deepEqual(json.sources, []);
+    assert.ok(!/artsy/i.test(JSON.stringify(json)));
   } finally {
     server.close();
     db.close();
@@ -385,6 +437,68 @@ test('model refreshes after the throttle window elapses', async () => {
     server.close();
     db.close();
   }
+});
+
+test('the priced range is capped to ±10% around its midpoint', async () => {
+  const db = seededDb();
+  const app = createApp({ db, visionEnabled: () => false });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { json } = await postJson(base, '/appraise', {
+      hints: {
+        artist: 'andy-warhol',
+        title: "Campbell's Soup",
+        size: '100 x 100 cm',
+        medium: 'print',
+        year: '1968',
+        country: 'USA',
+      },
+    });
+    assert.equal(json.status, 'priced');
+    const { low, high } = json.value;
+    const mid = (low + high) / 2;
+    assert.ok(low >= mid * 0.9 - 1e-6, `low ${low} should be within 10% below the mid ${mid}`);
+    assert.ok(high <= mid * 1.1 + 1e-6, `high ${high} should be within 10% above the mid ${mid}`);
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('the appraisal reply never names the auction data provider', async () => {
+  const db = seededDb();
+  const app = createApp({ db, visionEnabled: () => false });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { json } = await postJson(base, '/appraise', {
+      hints: {
+        artist: 'andy-warhol',
+        title: "Campbell's Soup",
+        size: '100 x 100 cm',
+        medium: 'print',
+        year: '1968',
+        country: 'USA',
+      },
+    });
+    assert.equal(json.status, 'priced');
+    assert.deepEqual(json.sources, []);
+    for (const entry of json.provenance) {
+      assert.equal(entry.source, undefined, 'provenance entries carry no provider');
+      assert.ok(!/artsy/i.test(JSON.stringify(entry)));
+    }
+    assert.ok(!/artsy/i.test(JSON.stringify(json)));
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('the app renders no data-provider footer', () => {
+  const src = readFileSync(new URL('../../app/App.js', import.meta.url), 'utf8');
+  assert.ok(!/artsy/i.test(src), 'the app should not name the provider');
+  assert.ok(!/provenance\[0\]\?\.source/.test(src), 'the provenance source footer should be gone');
 });
 
 test('malformed chat messages return 400', async () => {
