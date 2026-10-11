@@ -191,6 +191,86 @@ test('a zero-auction artist is priced from momentum and no source is named', asy
   }
 });
 
+test('a priced reply positions the work inside the artist stored output', async () => {
+  const db = seededDb();
+  const app = createApp({ db, visionEnabled: () => false });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { status, json } = await postJson(base, '/appraise', {
+      hints: {
+        artist: 'andy-warhol',
+        title: "Campbell's Soup",
+        size: '100 x 100 cm',
+        medium: 'print',
+        year: '1968',
+        country: 'USA',
+      },
+    });
+    assert.equal(status, 200);
+    assert.equal(json.status, 'priced');
+    assert.equal(json.positioning.available, true);
+    assert.equal(json.positioning.sampleSize, 60);
+    for (const key of ['medium', 'size', 'year', 'edition']) {
+      assert.equal(typeof json.positioning.percentiles[key], 'number', `${key} should have a percentile`);
+    }
+    assert.ok(
+      json.confidence.basis.some((line) => line.includes('stored works')),
+      `expected a positioning basis line, got:\n${json.confidence.basis.join('\n')}`,
+    );
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('a momentum artist reports positioning unavailable, with no percentile', async () => {
+  const db = seededDb();
+  upsertArtistSignals(db, [
+    {
+      artist_slug: 'emerging-artist',
+      artist_name: 'Emerging Artist',
+      follows: 5000,
+      shows_total: 10,
+      shows_36mo: 8,
+      solo_36mo: 4,
+      group_36mo: 4,
+      gallery_count: 5,
+      best_gallery_tier: 'B',
+      articles_total: 20,
+      articles_24mo: 10,
+      press_tier: 'B',
+    },
+  ]);
+  const app = createApp({ db, visionEnabled: () => false });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { status, json } = await postJson(base, '/appraise', {
+      hints: {
+        artist: 'Emerging Artist',
+        medium: 'print',
+        size: '100 x 100 cm',
+        year: '2015',
+        country: 'Japan',
+      },
+    });
+    assert.equal(status, 200);
+    assert.equal(json.status, 'priced');
+    assert.equal(json.confidence.level, 'momentum');
+    assert.equal(json.positioning.available, false);
+    assert.equal(json.positioning.sampleSize, 0);
+    assert.equal(json.positioning.percentiles, null);
+    assert.ok(
+      json.positioning.basis.some((line) => /unavailable/i.test(line)),
+      `expected positioning to report unavailable, got:\n${json.positioning.basis.join('\n')}`,
+    );
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
 test('empty database refuses rather than inventing a value', async () => {
   const db = openDb(':memory:');
   const app = createApp({ db, visionEnabled: () => false });

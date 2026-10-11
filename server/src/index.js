@@ -10,6 +10,7 @@ import {
 } from './valuation.js';
 import { identifyFromImage, visionConfigured } from './vision.js';
 import { answerQuestion, groundedAnswer } from './chat.js';
+import { positionWork } from './positioning.js';
 
 const HINT_FIELDS = ['artist', 'title', 'year', 'country', 'size', 'medium'];
 // The five extra fields the app prompts for when it cannot identify a piece.
@@ -368,6 +369,12 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
     let high = Math.min(Math.max(low, roundNice(est.high)), ceilBound);
     if (high < low) low = high = roundNice(est.predicted);
 
+    // Positioning annotates the reply only: it is computed after the value is
+    // fixed and never feeds back into the central estimate or its range.
+    const positioning = positionWork(model, est.query);
+    const confidenceBasis = basisReasons(est, model, identity);
+    confidenceBasis.push(positioning.basis[0]);
+
     return res.json({
       status: 'priced',
       identity,
@@ -375,8 +382,9 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
       confidence: {
         level: est.levelName,
         coverage: est.coverage,
-        basis: basisReasons(est, model, identity),
+        basis: confidenceBasis,
       },
+      positioning,
       provenance: provenanceFrom(est.comps),
       sources: [],
       similar: similarItems(model, est.query),
