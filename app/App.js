@@ -936,7 +936,8 @@ function PriceCard({ result }) {
       </Text>
       <Text style={styles.priceMeta}>
         {String(confidence.level || 'medium').toUpperCase()} confidence ·{' '}
-        {Math.round((confidence.coverage || 0) * 100)}% band · as of {value.as_of}
+        ±{Math.round(((value.high - value.low) / (value.high + value.low)) * 100)}% range · as
+        of {value.as_of}
       </Text>
       {(confidence.basis || []).map((line, index) => (
         <View key={index} style={styles.whyRow}>
@@ -966,7 +967,7 @@ function ProvenanceCard({ provenance, sources }) {
       <Hard shadow={THEME.shadow.card} style={styles.bubbleOuter} front={styles.bubbleFront}>
         {provenance.map((entry, index) => (
           <Text key={index} style={styles.cardLine}>
-            {[entry.artist, entry.title].filter(Boolean).join(' — ') || entry.ref || entry.source}
+            {[entry.artist, entry.title].filter(Boolean).join(' — ') || entry.ref}
             {entry.sale_date ? ` (${entry.sale_date})` : ''}
           </Text>
         ))}
@@ -977,7 +978,6 @@ function ProvenanceCard({ provenance, sources }) {
               </Text>
             ))
           : null}
-        {provenance[0]?.source ? <Text style={styles.cardFoot}>{provenance[0].source}</Text> : null}
       </Hard>
     </>
   );
@@ -1379,7 +1379,6 @@ const styles = StyleSheet.create({
   whyText: { color: COLORS.bodySoft, fontSize: 11.8, lineHeight: 18, flex: 1 },
   basisText: { color: COLORS.bodySoft, fontSize: 12, lineHeight: 18, flex: 1 },
   cardLine: { color: COLORS.body, fontSize: 12.5, lineHeight: 18, marginBottom: 5 },
-  cardFoot: { color: COLORS.caption, fontFamily: MONO, fontSize: 10.5, marginTop: 3 },
   similarRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' },
   similarName: { flex: 1, marginRight: 10 },
   similarPrice: { color: COLORS.berry, fontFamily: MONO, fontSize: 11.5 },

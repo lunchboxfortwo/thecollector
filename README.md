@@ -62,10 +62,10 @@ Result (`status` is `priced`, `needs_details`, or `refused`):
   "identity": { "artist": "…", "title": "…", "medium": "…", "dimensions": "…",
                  "year": "…", "country": "…", "edition": null,
                  "method": "catalog|vision", "match_confidence": 0.9 },
-  "value": { "low": 30000, "high": 890000, "currency": "USD", "as_of": "2026-10-04" },
-  "confidence": { "level": "medium", "coverage": 0.8, "basis": ["…"] },
-  "provenance": [ { "source": "Artsy auction results", "kind": "auction_sale", "ref": "…" } ],
-  "sources": ["Artsy auction results"],
+  "value": { "low": 90000, "high": 110000, "currency": "USD", "as_of": "2026-10-04" },
+  "confidence": { "level": "medium", "coverage": 0.6, "basis": ["…"] },
+  "provenance": [ { "kind": "auction_sale", "ref": "…" } ],
+  "sources": [],
   "similar": [ { "title": "…", "price": 12345, "currency": "USD", "…": "…" } ]
 }
 ```
@@ -81,21 +81,29 @@ Result (`status` is `priced`, `needs_details`, or `refused`):
 - `parseAreaCm2` prefers a stated cm measurement and only converts inches when no cm exists.
 - Medium is bucketed into `print`, `photograph`, `sculpture`, `painting`, `work_on_paper`, `other`.
 - Edition gate: two or more prior sales sharing artist + normalized title + **medium class**
-  (generic titles such as "Untitled" are skipped) → median of those sales in log space. The medium
-  class is part of the key, so a painting never binds to same-title prints.
+  (generic titles such as "Untitled" are skipped) → recency-weighted median of those sales in log
+  space. The medium class is part of the key, so a painting never binds to same-title prints.
 - Otherwise a hedonic least-squares fit of `log10(price)` on artist intercepts, `log10(area)`,
   medium dummies and creation year; an unmatched artist is pooled over the artists rather than
   pinned to one intercept. Unknown artist names are matched diacritic-insensitively
   (`Joan Miro` = `Joan Miró`).
-- The displayed range is the central 60% of the prediction's own comparable sales (same artist and
-  medium, nearest areas first; the edition's matched sales when it is an edition). The comp spread
-  is inflated by a factor measured on the held-out split so it covers out-of-sample sales at the
-  stated level. When there are too few comps the range falls back to the held-out residual band.
-- `npm test` reports empirical coverage at 50/60/80/90 on both a synthetic sample and, when
-  present, the ingested database.
+- Recent sales outweigh old ones throughout: every sale carries an exponential recency weight
+  (six-year half-life, floored at 0.05) used in the fit, the artist level and the comparable-sales
+  spread. A sale from 130 years ago can no longer pull the estimate or the range.
+- A sale-year trend is fit on the fitted model's residuals and projected forward to the newest
+  recorded sale, clamped at ±5%/year. This keeps the estimate on the recent market rather than the
+  whole history.
+- The displayed range is the recency-weighted spread of the prediction's own comparable sales,
+  then **hard-capped at ±10%** of the central estimate. The `why` states the cap and the capped
+  range's empirical held-out coverage.
+- No data provider is named in the reply: `sources` is empty and each `provenance` row carries the
+  sale facts without a `source` field.
+- `npm test` reports empirical coverage at 50/60/80/90 and the capped-range coverage on both a
+  synthetic sample and, when present, the ingested database.
 
-On this machine's ingest (24,614 realized sales, 8 artists) the held-out coverage was
-**49.5% / 80.0% / 90.1%** at nominal 50/80/90.
+On the synthetic sample the capped ±10% range covered **21.3%** of held-out sales; the wider
+50/80/90 coverage is printed by `npm test` for both the synthetic sample and, when present, the
+local ingest.
 
 ### `POST /chat`
 

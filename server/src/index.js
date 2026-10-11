@@ -1,7 +1,13 @@
 import { pathToFileURL } from 'node:url';
 import express from 'express';
 import { openDb, allSales, salesCount } from './db.js';
-import { buildModel, estimate, roundNice } from './valuation.js';
+import {
+  buildModel,
+  estimate,
+  roundNice,
+  MAX_BAND_FRACTION,
+  RECENCY_HALF_LIFE_YEARS,
+} from './valuation.js';
 import { identifyFromImage, visionConfigured } from './vision.js';
 import { answerQuestion, groundedAnswer } from './chat.js';
 
@@ -21,6 +27,20 @@ function optionalString(value, field) {
 
 function today() {
   return new Date().toISOString().slice(0, 10);
+}
+
+// Two-significant-figure rounding inward, so a display value never crosses a
+// bound it is clamped to.
+function niceDown(value) {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(value)) - 1);
+  return Math.max(1, Math.floor(value / magnitude) * magnitude);
+}
+
+function niceUp(value) {
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(value)) - 1);
+  return Math.max(1, Math.ceil(value / magnitude) * magnitude);
 }
 
 function identityFromHints(hints) {
@@ -119,17 +139,24 @@ function basisReasons(est, model, identity) {
   if (identity.artist && !est.query.artist_slug) {
     reasons.push('Artist was not matched in the comps, so the pooled model was used.');
   }
-  const pct = Math.round(est.coverage * 100);
-  if (est.bandSource === 'comps') {
+  // Recency weighting and the fitted sale-year trend, stated so the why is
+  // honest about the recent prices driving the estimate.
+  reasons.push(
+    `Recent sales weigh more: a sale ${Math.round(RECENCY_HALF_LIFE_YEARS)} years old counts half as much as a new one.`,
+  );
+  const slope = model.trend?.slope;
+  if (Number.isFinite(slope) && Math.abs(slope) > 1e-4) {
+    const pctPerYear = (Math.pow(10, slope) - 1) * 100;
+    const dir = pctPerYear >= 0 ? 'up' : 'down';
     reasons.push(
-      `Range is the central ${pct}% of ${est.comparableCount} comparable sales for this artist and medium (×${est.band.toFixed(1)} either side).`,
+      `Fitted sale-price trend ${Math.abs(pctPerYear).toFixed(1)}% a year ${dir}, projected forward to the latest recorded sale.`,
     );
-  } else {
-    reasons.push(`Band is ×${est.band.toFixed(1)} either side, calibrated on held-out residuals to ${pct}% coverage.`);
   }
-  const empirical = model.coverage?.[est.coverage];
+  const capPct = Math.round(MAX_BAND_FRACTION * 100);
+  reasons.push(`Range is capped at ±${capPct}% around the central estimate.`);
+  const empirical = est.capped ? model.cappedCoverage : model.coverage?.[est.coverage];
   if (empirical != null) {
-    reasons.push(`Held-out empirical coverage at ${pct}%: ${(empirical * 100).toFixed(0)}%.`);
+    reasons.push(`On held-out sales this range covered ${(empirical * 100).toFixed(0)}%.`);
   }
   return reasons;
 }
@@ -157,9 +184,10 @@ function similarItems(model, query, limit = 5) {
     }));
 }
 
+// One row per recorded sale behind the estimate. The data provider is never
+// named: the requester asked that the record's source stay out of the reply.
 function provenanceFrom(comps) {
   return comps.slice(0, 5).map((c) => ({
-    source: 'Artsy auction results',
     kind: 'auction_sale',
     ref: c.internal_id,
     title: c.title,
@@ -309,8 +337,13 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
       });
     }
 
-    const low = roundNice(est.low);
-    const high = Math.max(low, roundNice(est.high));
+    // Round for display, then keep the shown range inside the ±10% promise
+    // even after two-significant-figure rounding pushed an edge outward.
+    const floorBound = niceUp(est.predicted * (1 - MAX_BAND_FRACTION));
+    const ceilBound = niceDown(est.predicted * (1 + MAX_BAND_FRACTION));
+    let low = Math.max(roundNice(est.low), floorBound);
+    let high = Math.min(Math.max(low, roundNice(est.high)), ceilBound);
+    if (high < low) low = high = roundNice(est.predicted);
 
     return res.json({
       status: 'priced',
@@ -322,7 +355,7 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
         basis: basisReasons(est, model, identity),
       },
       provenance: provenanceFrom(est.comps),
-      sources: ['Artsy auction results'],
+      sources: [],
       similar: similarItems(model, est.query),
     });
   });
