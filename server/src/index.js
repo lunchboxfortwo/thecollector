@@ -9,6 +9,7 @@ import {
   RECENCY_HALF_LIFE_YEARS,
 } from './valuation.js';
 import { identifyFromImage, visionConfigured } from './vision.js';
+import { buildAssessment, cohortPriceSignal } from './assessment.js';
 import { answerQuestion, groundedAnswer } from './chat.js';
 
 const HINT_FIELDS = ['artist', 'title', 'year', 'country', 'size', 'medium'];
@@ -114,7 +115,7 @@ function missingFields(identity) {
   return missing;
 }
 
-function needsDetails(basis, identity = {}, missing = MISSING_FIELDS) {
+function needsDetails(basis, identity = {}, missing = MISSING_FIELDS, assessment = null) {
   return {
     status: 'needs_details',
     identity: definedIdentity(identity),
@@ -123,7 +124,53 @@ function needsDetails(basis, identity = {}, missing = MISSING_FIELDS) {
     provenance: [],
     sources: [],
     missing_fields: missing,
+    ...(assessment ? { assessment } : {}),
   };
+}
+
+// A price/momentum signal in 0..100 for the underpriced flag. For a work with
+// no auction record the momentum score is the signal; otherwise it is the
+// percentile of the estimated price inside the artist's recorded sales, or the
+// whole cohort when the artist sample is thin.
+function priceSignalFor(est, model) {
+  if (est.method === 'momentum' && est.momentum) return est.momentum.score;
+  const artistRows = est.query.artist_slug
+    ? model.rows.filter((row) => row.artist_slug === est.query.artist_slug)
+    : [];
+  const cohort = artistRows.length >= 5 ? artistRows : model.rows;
+  return cohortPriceSignal(
+    cohort.map((row) => row.price_cents / 100),
+    est.predicted,
+  );
+}
+
+// The piece-based assessment is additive: it never touches the value or its
+// range. It is built only when vision returned attributes of the work itself.
+function assessmentFor(attributes, est, model) {
+  if (!attributes) return null;
+  const priceSignal = est ? priceSignalFor(est, model) : null;
+  return buildAssessment({ attributes, priceSignal });
+}
+
+function assessmentBasisLines(assessment) {
+  if (!assessment) return [];
+  const labels = { composition: 'composition', colorLight: 'color/light', subject: 'subject', originality: 'originality', condition: 'condition' };
+  const attributes = Object.entries(assessment.attributes)
+    .map(([key, value]) => `${labels[key] || key} ${value}`)
+    .join(', ');
+  const lines = [
+    `Notice score ${assessment.notice_score}/100 (${assessment.notice_band}) from the work itself, independent of price.`,
+    `Attributes: ${attributes}.`,
+  ];
+  if (assessment.coverage === 'unavailable') {
+    lines.push('Rubric coverage: unavailable (no ground-truth labels).');
+  } else {
+    lines.push(
+      `Rubric agreement ${Math.round((assessment.agreement ?? 0) * 100)}% over ${assessment.rubric.labeled} labelled works; coverage: ${Math.round(assessment.coverage * 100)}%.`,
+    );
+  }
+  lines.push(...assessment.basis);
+  return lines;
 }
 
 function basisReasons(est, model, identity) {
@@ -303,6 +350,7 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
     const hasImage = Boolean(body.imageBase64 || body.imageUrl);
     let visionIdentity = null;
     let visionNote = null;
+    let visionAttributes = null;
     if (hasImage && visionEnabled()) {
       const described = Object.entries(hints).map(([key, value]) => `${key}: ${value}`);
       const note = [body.note, described.length ? `User-provided details: ${described.join(', ')}` : null]
@@ -316,6 +364,7 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
       });
       if (result?.identified) visionIdentity = identityFromVision(result);
       else visionNote = result?.reason || 'vision returned no identity';
+      if (result?.attributes) visionAttributes = result.attributes;
     }
 
     const identity = mergeIdentity(visionIdentity, identityFromHints(hints));
@@ -326,7 +375,10 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
       else if (hasImage && !visionEnabled()) basis.push('No vision key configured; the image was not identified.');
       else if (!hasImage) basis.push('No image supplied; vision was not attempted.');
       basis.push('Provide what you know and the appraiser will price it from recorded auction sales.');
-      return res.json(needsDetails(basis, identity, missingFields(identity)));
+      // With a piece reading but no price yet, show the notice signal only.
+      const assessment = assessmentFor(visionAttributes, null, null);
+      if (assessment) basis.push(...assessmentBasisLines(assessment));
+      return res.json(needsDetails(basis, identity, missingFields(identity), assessment));
     }
 
     const model = getModel();
@@ -368,6 +420,10 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
     let high = Math.min(Math.max(low, roundNice(est.high)), ceilBound);
     if (high < low) low = high = roundNice(est.predicted);
 
+    const assessment = assessmentFor(visionAttributes, est, model);
+    const basis = basisReasons(est, model, identity);
+    if (assessment) basis.push(...assessmentBasisLines(assessment));
+
     return res.json({
       status: 'priced',
       identity,
@@ -375,11 +431,12 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
       confidence: {
         level: est.levelName,
         coverage: est.coverage,
-        basis: basisReasons(est, model, identity),
+        basis,
       },
       provenance: provenanceFrom(est.comps),
       sources: [],
       similar: similarItems(model, est.query),
+      ...(assessment ? { assessment } : {}),
     });
   });
 

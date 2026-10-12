@@ -1,0 +1,127 @@
+{
+  "version": 1,
+  "curated_at": "2025-10-12",
+  "about": "A small human-curated yardstick for the piece-based notice score. Each entry is one work a curator rated by eye on the five piece attributes, with a holistic notice label (high, medium, low). The notice score is measured against those labels; the rubric is not shown to the vision model.",
+  "attributes": {
+    "composition": "Structure and balance of the arrangement, 0..100.",
+    "colorLight": "Handling of color and light, 0..100.",
+    "subject": "Strength and interest of the subject, 0..100.",
+    "originality": "Distinctiveness against the artist's known motifs, 0..100.",
+    "condition": "Apparent physical condition, 0..100."
+  },
+  "notice_thresholds": { "high": 70, "medium": 45 },
+  "provenance": "Curator pass over catalogued works with a stable visual record; each entry cites the review session. Labels are holistic judgments, not the weighted average, so they occasionally disagree with the score.",
+  "limitations": "This is a small convenience sample, not an independent validation set. The attributes and the human labels often come from the same visual read and the same curator, so agreement is a sanity check on the score, not proof of quality. Genre and era are not balanced and the sample is too small to measure bias by genre or era; treat agreement as indicative only and revisit as the rubric grows.",
+  "entries": [
+    {
+      "id": "R01",
+      "notice": "high",
+      "provenance": "curator session 2025-09-A",
+      "attributes": { "composition": 80, "colorLight": 75, "subject": 70, "originality": 85, "condition": 90 }
+    },
+    {
+      "id": "R02",
+      "notice": "high",
+      "provenance": "curator session 2025-09-A",
+      "attributes": { "composition": 70, "colorLight": 80, "subject": 75, "originality": 65, "condition": 80 }
+    },
+    {
+      "id": "R03",
+      "notice": "medium",
+      "provenance": "curator session 2025-09-A",
+      "attributes": { "composition": 55, "colorLight": 60, "subject": 50, "originality": 45, "condition": 70 }
+    },
+    {
+      "id": "R04",
+      "notice": "low",
+      "provenance": "curator session 2025-09-A",
+      "attributes": { "composition": 40, "colorLight": 35, "subject": 45, "originality": 30, "condition": 60 }
+    },
+    {
+      "id": "R05",
+      "notice": "high",
+      "provenance": "curator session 2025-09-B",
+      "attributes": { "composition": 90, "colorLight": 85, "subject": 80, "originality": 90, "condition": 85 }
+    },
+    {
+      "id": "R06",
+      "notice": "medium",
+      "provenance": "curator session 2025-09-B",
+      "attributes": { "composition": 65, "colorLight": 70, "subject": 60, "originality": 55, "condition": 75 }
+    },
+    {
+      "id": "R07",
+      "notice": "high",
+      "provenance": "curator session 2025-09-B",
+      "attributes": { "composition": 75, "colorLight": 60, "subject": 65, "originality": 80, "condition": 70 }
+    },
+    {
+      "id": "R08",
+      "notice": "medium",
+      "provenance": "curator session 2025-09-B",
+      "attributes": { "composition": 50, "colorLight": 55, "subject": 40, "originality": 50, "condition": 65 }
+    },
+    {
+      "id": "R09",
+      "notice": "low",
+      "provenance": "curator session 2025-09-C",
+      "attributes": { "composition": 35, "colorLight": 40, "subject": 30, "originality": 25, "condition": 55 }
+    },
+    {
+      "id": "R10",
+      "notice": "high",
+      "provenance": "curator session 2025-09-C",
+      "attributes": { "composition": 85, "colorLight": 80, "subject": 75, "originality": 70, "condition": 80 }
+    },
+    {
+      "id": "R11",
+      "notice": "medium",
+      "provenance": "curator session 2025-09-C",
+      "attributes": { "composition": 60, "colorLight": 50, "subject": 70, "originality": 45, "condition": 60 }
+    },
+    {
+      "id": "R12",
+      "notice": "low",
+      "provenance": "curator session 2025-09-C",
+      "human_note": "Curator read the subject as weak despite fair color, and called it low.",
+      "attributes": { "composition": 45, "colorLight": 50, "subject": 55, "originality": 40, "condition": 70 }
+    },
+    {
+      "id": "R13",
+      "notice": "high",
+      "provenance": "curator session 2025-10-A",
+      "attributes": { "composition": 78, "colorLight": 72, "subject": 68, "originality": 88, "condition": 75 }
+    },
+    {
+      "id": "R14",
+      "notice": "low",
+      "provenance": "curator session 2025-10-A",
+      "attributes": { "composition": 30, "colorLight": 25, "subject": 35, "originality": 20, "condition": 40 }
+    },
+    {
+      "id": "R15",
+      "notice": "high",
+      "provenance": "curator session 2025-10-A",
+      "human_note": "Curator saw a distinctive arrangement the attribute average understates, and called it high.",
+      "attributes": { "composition": 68, "colorLight": 62, "subject": 58, "originality": 72, "condition": 66 }
+    },
+    {
+      "id": "R16",
+      "notice": "high",
+      "provenance": "curator session 2025-10-A",
+      "attributes": { "composition": 82, "colorLight": 78, "subject": 85, "originality": 75, "condition": 88 }
+    },
+    {
+      "id": "R17",
+      "notice": "medium",
+      "provenance": "curator session 2025-10-A",
+      "attributes": { "composition": 58, "colorLight": 48, "subject": 62, "originality": 52, "condition": 58 }
+    },
+    {
+      "id": "R18",
+      "notice": "high",
+      "provenance": "curator session 2025-10-B",
+      "attributes": { "composition": 88, "colorLight": 90, "subject": 82, "originality": 84, "condition": 92 }
+    }
+  ]
+}

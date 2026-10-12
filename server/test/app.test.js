@@ -495,6 +495,42 @@ test('the appraisal reply never names the auction data provider', async () => {
   }
 });
 
+test('a price with a piece assessment still names no record source', async () => {
+  const db = seededDb();
+  const app = createApp({
+    db,
+    visionEnabled: () => true,
+    vision: async () => ({
+      identified: true,
+      method: 'vision',
+      artist: 'andy-warhol',
+      title: "Campbell's Soup",
+      medium: 'print',
+      dimensions: '100 x 100 cm',
+      year: '1968',
+      country: 'USA',
+      match_confidence: 0.9,
+      attributes: { composition: 84, colorLight: 80, subject: 78, originality: 86, condition: 82 },
+    }),
+  });
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { json } = await postJson(base, '/appraise', {
+      imageBase64: 'AAAA',
+      mimeType: 'image/jpeg',
+      hints: { size: '100 x 100 cm', medium: 'print' },
+    });
+    assert.equal(json.status, 'priced');
+    assert.ok(json.assessment, 'expected the piece assessment');
+    assert.deepEqual(json.sources, []);
+    assert.ok(!/artsy/i.test(JSON.stringify(json)), 'no record source is named');
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
 test('the app renders no data-provider footer', () => {
   const src = readFileSync(new URL('../../app/App.js', import.meta.url), 'utf8');
   assert.ok(!/artsy/i.test(src), 'the app should not name the provider');
