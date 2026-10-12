@@ -1,5 +1,11 @@
-// Optional multimodal identification. Without a key the endpoint still works and
-// returns `needs_details`; with a key it asks a vision model for structured attributes.
+// Optional multimodal identification and piece assessment. Without a key the
+// endpoint still works and returns `needs_details`; with a key it asks a vision
+// model for structured identity fields and, in the same call, for independent
+// attributes of the work itself (composition, color/light, subject, originality
+// against the artist's known motifs, condition). The attribute scores never read
+// price or the artist's fame.
+
+import { normalizeAttributes } from './assessment.js';
 
 export function visionConfig() {
   const key = process.env.OPENROUTER_API_KEY || process.env.VISION_API_KEY;
@@ -21,12 +27,20 @@ function clean(value) {
   return s;
 }
 
-const PROMPT = (note) => `You are an art and collectible cataloguer. Identify the single work shown in the image.
+const PROMPT = (note) => `You are an art and collectible cataloguer. Identify the single work shown in the image and assess the work itself.
 Reply with ONLY minified JSON, no markdown fences:
-{"artist":string|null,"title":string|null,"medium":string|null,"dimensions":string|null,"year":string|null,"country":string|null,"provenance":string|null,"edition":string|null,"confidence":number}
+{"artist":string|null,"title":string|null,"medium":string|null,"dimensions":string|null,"year":string|null,"country":string|null,"provenance":string|null,"edition":string|null,"confidence":number,"attributes":{"composition":number,"colorLight":number,"subject":number,"originality":number,"condition":number},"assessment_note":string|null}
 Use null for any field you cannot determine. "country" is the work's country of origin.
 "provenance" is one short sentence on where the work comes from (gallery, collection, auction or publication history) or null.
 "confidence" is 0..1.
+"attributes" are independent quality signals about the work itself, each 0..100:
+- composition: structure and balance of the arrangement
+- colorLight: handling of color and light
+- subject: strength and interest of the subject
+- originality: distinctiveness against the artist's known motifs
+- condition: apparent physical condition
+Judge only what is visible in the work. Do not use price, market data, provenance or the artist's fame in these numbers.
+"assessment_note" is one short sentence on the work's notice-worthy qualities, or null.
 Additional information from the user (may be empty): ${note || '(none)'}`;
 
 export async function identifyFromImage({ imageBase64, mimeType, imageUrl, note } = {}) {
@@ -73,13 +87,19 @@ export async function identifyFromImage({ imageBase64, mimeType, imageUrl, note 
       provenance: clean(parsed.provenance),
       edition: clean(parsed.edition),
     };
-    if (!Object.values(fields).some(Boolean)) {
+    // The assessment attributes are independent of identity: a work whose artist
+    // cannot be named still carries a notice score.
+    const attributes = normalizeAttributes(parsed.attributes);
+    const assessmentNote = clean(parsed.assessment_note);
+    if (!Object.values(fields).some(Boolean) && !attributes) {
       return { identified: false, reason: 'model returned no identity', raw: parsed };
     }
     return {
       identified: true,
       method: 'vision',
       ...fields,
+      ...(attributes ? { attributes } : {}),
+      ...(assessmentNote ? { assessment_note: assessmentNote } : {}),
       match_confidence: Number(parsed.confidence) || 0.5,
     };
   } catch (err) {
