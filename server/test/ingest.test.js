@@ -12,9 +12,14 @@ import {
 import {
   fetchArtistSales,
   fetchArtistsPage,
+  fetchArtistSignals,
   ingestAll,
   ingestAllFull,
   ingestSignals,
+  LIST_ARTISTS_QUERY,
+  SIGNALS_COUNTS_QUERY,
+  SIGNALS_SHOWS_QUERY,
+  SIGNALS_SHOWS_BASIC_QUERY,
 } from '../src/artsy.js';
 
 // ---------------------------------------------------------------------------
@@ -80,7 +85,14 @@ function makeClient({
       calls.signals.push(variables.slug);
       if (failSignalSlugs.has(variables.slug)) throw new Error(`signals ${variables.slug} exploded`);
       const counts = signalCounts[variables.slug] ?? { follows: 0, articles: 0, shows: 0 };
-      return { artist: { name: `Name ${variables.slug}`, counts } };
+      // The live ArtistCounts type has no `shows`; the total lives on the shows connection.
+      return {
+        artist: {
+          name: `Name ${variables.slug}`,
+          counts: { follows: counts.follows, articles: counts.articles },
+          showsConnection: { totalCount: counts.shows ?? 0 },
+        },
+      };
     }
     if (query.includes('showsConnection')) {
       const nodes = signalShows[variables.slug] ?? [];
@@ -154,6 +166,58 @@ test('fetchArtistsPage drops null nodes and reads auction result counts', async 
   assert.equal(page.artists[1].auctionResults, 0);
   assert.equal(page.endCursor, 'cursor-1');
   assert.equal(page.hasNextPage, true);
+});
+
+// ---------------------------------------------------------------------------
+// live schema shape (regression: ArtistCounts has no `shows` field)
+// ---------------------------------------------------------------------------
+
+test('catalog and signal queries read shows from showsConnection.totalCount', () => {
+  for (const query of [LIST_ARTISTS_QUERY, SIGNALS_COUNTS_QUERY]) {
+    assert.match(query, /showsConnection \{ totalCount \}/);
+    assert.doesNotMatch(query, /counts \{[^}]*\bshows\b/);
+  }
+});
+
+test('shows queries match the drifted Artsy schema', () => {
+  for (const query of [SIGNALS_SHOWS_QUERY, SIGNALS_SHOWS_BASIC_QUERY]) {
+    assert.match(query, /\.\.\. on Partner \{ name categories \{ name \} \}/);
+    assert.doesNotMatch(query, /\bisSolo\b/);
+    assert.doesNotMatch(query, /partner \{ name categories \}/);
+  }
+  assert.match(SIGNALS_SHOWS_QUERY, /\bkind\b/);
+});
+
+test('fetchArtistsPage reads shows from showsConnection.totalCount', async () => {
+  const { gqlImpl } = makeClient({
+    pages: [
+      {
+        cursor: null,
+        endCursor: null,
+        hasNextPage: false,
+        artists: [
+          { slug: 'a', name: 'A', counts: { auctionResults: 2, articles: 3 }, showsConnection: { totalCount: 12 } },
+        ],
+      },
+    ],
+  });
+  const page = await fetchArtistsPage({ gqlImpl, retries: 0 });
+  assert.equal(page.artists[0].auctionResults, 2);
+  assert.equal(page.artists[0].shows, 12);
+  assert.equal(page.artists[0].articles, 3);
+});
+
+test('live Artsy smoke: showsConnection counts resolve', { skip: process.env.ARTSY_LIVE !== '1' }, async () => {
+  const page = await fetchArtistsPage({ first: 3 });
+  assert.ok(page.artists.length > 0, 'live catalog returned artists');
+  for (const artist of page.artists) {
+    assert.ok(Number.isFinite(artist.shows), `${artist.slug} shows ${artist.shows}`);
+  }
+  const signals = await fetchArtistSignals({ slug: 'pablo-picasso', name: 'Pablo Picasso' });
+  assert.equal(signals.artist_slug, 'pablo-picasso');
+  assert.ok(signals.shows_total >= 1, `expected Picasso shows, got ${signals.shows_total}`);
+  assert.ok(signals.shows_36mo >= 1, `expected a recent Picasso show, got ${signals.shows_36mo}`);
+  assert.ok(signals.gallery_count >= 1, `expected a Picasso gallery, got ${signals.gallery_count}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -266,9 +330,9 @@ const SIGNAL_CATALOG = [
     endCursor: null,
     hasNextPage: false,
     artists: [
-      { slug: 'auctioned', name: 'Auctioned', counts: { auctionResults: 2, shows: 4, articles: 1 } },
-      { slug: 'emerging', name: 'Emerging', counts: { auctionResults: 0, shows: 12, articles: 9 } },
-      { slug: 'quiet', name: 'Quiet', counts: { auctionResults: 0, shows: 0, articles: 0 } },
+      { slug: 'auctioned', name: 'Auctioned', counts: { auctionResults: 2, articles: 1 }, showsConnection: { totalCount: 4 } },
+      { slug: 'emerging', name: 'Emerging', counts: { auctionResults: 0, articles: 9 }, showsConnection: { totalCount: 12 } },
+      { slug: 'quiet', name: 'Quiet', counts: { auctionResults: 0, articles: 0 }, showsConnection: { totalCount: 0 } },
     ],
   },
 ];
@@ -283,11 +347,11 @@ function signalClient(extra = {}) {
     },
     signalShows: {
       auctioned: [
-        { startAt: '2024-01-01T00:00:00.000Z', isSolo: true, partner: { name: 'Blue', categories: ['blue-chip'] } },
+        { startAt: '2024-01-01T00:00:00.000Z', kind: 'solo', partner: { name: 'Blue', categories: [{ name: 'blue-chip' }] } },
       ],
       emerging: [
-        { startAt: '2024-02-01T00:00:00.000Z', isSolo: true, partner: { name: 'Est', categories: ['established'] } },
-        { startAt: '2023-05-01T00:00:00.000Z', isSolo: false, partner: { name: 'Eme', categories: ['emerging'] } },
+        { startAt: '2024-02-01T00:00:00.000Z', kind: 'solo', partner: { name: 'Est', categories: [{ name: 'established' }] } },
+        { startAt: '2023-05-01T00:00:00.000Z', kind: 'group', partner: { name: 'Eme', categories: [{ name: 'emerging' }] } },
       ],
     },
     ...extra,

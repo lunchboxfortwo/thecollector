@@ -67,7 +67,8 @@ query ($cursor: String, $first: Int!) {
       node {
         slug
         name
-        counts { auctionResults shows articles }
+        counts { auctionResults articles }
+        showsConnection { totalCount }
       }
     }
   }
@@ -188,7 +189,7 @@ export async function fetchArtistsPage({ cursor = null, first = 100, gqlImpl = g
       slug: node.slug,
       name: node.name ?? null,
       auctionResults: Number(node.counts?.auctionResults ?? 0),
-      shows: Number(node.counts?.shows ?? 0),
+      shows: Number(node.showsConnection?.totalCount ?? 0),
       articles: Number(node.counts?.articles ?? 0),
     }));
   return {
@@ -319,7 +320,8 @@ export const SIGNALS_COUNTS_QUERY = `
 query ($slug: String!) {
   artist(id: $slug) {
     name
-    counts { follows articles shows }
+    counts { follows articles }
+    showsConnection { totalCount }
   }
 }`;
 
@@ -330,15 +332,17 @@ query ($slug: String!) {
       edges {
         node {
           startAt
-          isSolo
-          partner { name categories }
+          kind
+          partner {
+            ... on Partner { name categories { name } }
+          }
         }
       }
     }
   }
 }`;
 
-// Fallback for a schema without `isSolo`; grouping every show understates the
+// Fallback for a schema without `kind`; grouping every show understates the
 // exhibition signal but keeps the ingest working.
 export const SIGNALS_SHOWS_BASIC_QUERY = `
 query ($slug: String!) {
@@ -347,7 +351,9 @@ query ($slug: String!) {
       edges {
         node {
           startAt
-          partner { name categories }
+          partner {
+            ... on Partner { name categories { name } }
+          }
         }
       }
     }
@@ -359,7 +365,9 @@ const TIER_RANK = { A: 3, B: 2, C: 1 };
 // Map a partner's categories to a venue tier. Blue-chip or museum partners are
 // A, established B, emerging C; anything else is left unknown.
 export function partnerTier(categories) {
-  const cats = (categories ?? []).map((c) => String(c).toLowerCase());
+  // `categories` is a list of PartnerCategory objects live; plain strings are
+  // kept for older callers and the fake test client.
+  const cats = (categories ?? []).map((c) => String(c?.name ?? c).toLowerCase());
   if (cats.some((c) => c.includes('blue-chip') || c.includes('blue chip') || c.includes('museum'))) return 'A';
   if (cats.some((c) => c.includes('established'))) return 'B';
   if (cats.some((c) => c.includes('emerging'))) return 'C';
@@ -388,7 +396,7 @@ function followersDelta(previous, follows, now) {
 }
 
 // Reduce one artist's counts and shows to the stored signal row.
-export function signalsFromGraph({ artist, name, counts = {}, shows = [], previous = null, now = new Date() }) {
+export function signalsFromGraph({ artist, name, counts = {}, shows = [], showsTotal = null, previous = null, now = new Date() }) {
   const asOf = now.toISOString();
   const cutoff36 = monthsBefore(now, 36);
   let shows36 = 0;
@@ -403,7 +411,7 @@ export function signalsFromGraph({ artist, name, counts = {}, shows = [], previo
     const started = Date.parse(node.startAt ?? node.start_at ?? '');
     if (!Number.isFinite(started) || started < cutoff36) continue;
     shows36++;
-    if (node.isSolo === true || node.is_solo === true) solo36++;
+    if (node.isSolo === true || node.is_solo === true || node.kind === 'solo') solo36++;
     else group36++;
   }
   const follows = Number(counts.follows ?? 0);
@@ -412,7 +420,7 @@ export function signalsFromGraph({ artist, name, counts = {}, shows = [], previo
     artist_name: name ?? artist.name ?? null,
     as_of: asOf,
     follows,
-    shows_total: Number(counts.shows ?? shows.length),
+    shows_total: Number(showsTotal ?? shows.length),
     shows_36mo: shows36,
     solo_36mo: solo36,
     group_36mo: group36,
@@ -434,6 +442,7 @@ export async function fetchArtistSignals(artist, { gqlImpl = gql, retries = 3, l
   const countsData = await gqlWithRetry(SIGNALS_COUNTS_QUERY, { slug: artist.slug }, { gqlImpl, retries });
   const node = countsData?.artist;
   const counts = node?.counts ?? {};
+  const showsTotal = node?.showsConnection?.totalCount == null ? null : Number(node.showsConnection.totalCount);
   let shows = [];
   try {
     const showData = await gqlWithRetry(SIGNALS_SHOWS_QUERY, { slug: artist.slug }, { gqlImpl, retries });
@@ -446,7 +455,7 @@ export async function fetchArtistSignals(artist, { gqlImpl = gql, retries = 3, l
       log(`  ! signals ${artist.slug}: shows unavailable (${err2.message}); using counts only`);
     }
   }
-  return signalsFromGraph({ artist, name: node?.name, counts, shows, previous, now });
+  return signalsFromGraph({ artist, name: node?.name, counts, shows, showsTotal, previous, now });
 }
 
 // Drain pending signal artists, bounded per run. Per-artist signal_status is the
