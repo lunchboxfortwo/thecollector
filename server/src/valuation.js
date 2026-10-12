@@ -43,7 +43,7 @@ const COMP_AREA_FACTORS = [1.6, 3.16, 10, Infinity];
 // ---------------------------------------------------------------------------
 
 // Fold case and diacritics so "Joan Miro" matches "Joan Miró".
-function foldName(value) {
+export function foldName(value) {
   return String(value || '')
     .toLowerCase()
     .normalize('NFD')
