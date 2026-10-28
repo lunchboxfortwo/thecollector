@@ -1,0 +1,21 @@
+[Unit]
+Description=The Collector appraisal backend (port 3000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# The model build over ~3.4M sales peaks near 15 GB RSS, so the default 4 GB
+# heap is not enough. 24576 MB is the measured working value from probe.mjs.
+WorkingDirectory=/home/lunchbox/.local/state/beeline/agents/71e533eb94f12504a9e2dfbc3cb85f1e04e43f643d7595466c99fb5cb81e8a5d/rooms/5c04b58d-1620-43ed-971d-421fc9667d85/agent-home/user/collector-backend
+ExecStart=/home/lunchbox/.local/share/fnm/node-versions/v24.16.0/installation/bin/node --max-old-space-size=24576 src/index.js
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Restart=always
+RestartSec=5
+TimeoutStopSec=20
+StandardOutput=append:/home/lunchbox/.local/state/beeline/agents/71e533eb94f12504a9e2dfbc3cb85f1e04e43f643d7595466c99fb5cb81e8a5d/rooms/5c04b58d-1620-43ed-971d-421fc9667d85/agent-home/user/collector-backend/server.log
+StandardError=append:/home/lunchbox/.local/state/beeline/agents/71e533eb94f12504a9e2dfbc3cb85f1e04e43f643d7595466c99fb5cb81e8a5d/rooms/5c04b58d-1620-43ed-971d-421fc9667d85/agent-home/user/collector-backend/server.log
+
+[Install]
+WantedBy=default.target

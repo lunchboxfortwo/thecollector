@@ -261,7 +261,17 @@ function provenanceFrom(comps) {
   }));
 }
 
-export function createApp({ db, vision = identifyFromImage, visionEnabled = visionConfigured, chat = answerQuestion } = {}) {
+export function createApp({
+  db,
+  vision = identifyFromImage,
+  visionEnabled = visionConfigured,
+  chat = answerQuestion,
+  // The first real appraisal used to pay for the whole model build inside the
+  // request. `prewarm` builds it once, synchronously, before the listener is
+  // opened so no request can arrive during the multi-minute build.
+  prewarm = false,
+  buildModelFn = buildModel,
+} = {}) {
   const database = db || openDb();
   const app = express();
   app.disable('x-powered-by');
@@ -278,7 +288,7 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
     rebuilding = true;
     setImmediate(() => {
       try {
-        modelCache = buildModel(allSales(database));
+        modelCache = buildModelFn(allSales(database));
         modelCount = salesCount(database);
         modelBuiltAt = Date.now();
       } finally {
@@ -289,7 +299,7 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
   const getModel = () => {
     const count = salesCount(database);
     if (!modelCache) {
-      modelCache = buildModel(allSales(database));
+      modelCache = buildModelFn(allSales(database));
       modelCount = count;
       modelBuiltAt = Date.now();
     } else if (!rebuilding && count !== modelCount && Date.now() - modelBuiltAt >= REBUILD_MS) {
@@ -447,6 +457,8 @@ export function createApp({ db, vision = identifyFromImage, visionEnabled = visi
     });
   });
 
+  if (prewarm) getModel();
+
   return app;
 }
 
@@ -454,7 +466,9 @@ const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv
 if (isMain) {
   const port = Number(process.env.PORT || 3000);
   const db = openDb();
-  const app = createApp({ db });
+  const startedAt = Date.now();
+  const app = createApp({ db, prewarm: true });
+  console.log(`Model ready in ${((Date.now() - startedAt) / 1000).toFixed(1)}s`);
   app.listen(port, () => {
     console.log(`The Collector server listening on http://localhost:${port}`);
   });
