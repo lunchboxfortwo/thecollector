@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { openDb, insertSales, upsertArtistSignals } from '../src/db.js';
 import { createApp } from '../src/index.js';
-import { classifyMedium, normalizeTitle } from '../src/valuation.js';
+import { buildModel, classifyMedium, normalizeTitle } from '../src/valuation.js';
 
 function makeSale({ artist, title, price, area, medium, year, id }) {
   return {
@@ -58,6 +58,45 @@ async function postJson(base, path, body) {
   });
   return { status: res.status, json: await res.json() };
 }
+
+test('prewarm builds the model before the listener opens', async () => {
+  const db = seededDb();
+  let builds = 0;
+  const app = createApp({
+    db,
+    visionEnabled: () => false,
+    prewarm: true,
+    buildModelFn: (rows) => {
+      builds++;
+      return buildModel(rows);
+    },
+  });
+  // The build must already be done when createApp returns, before anyone can
+  // listen or send the first appraisal.
+  assert.equal(builds, 1);
+  const server = await startApp(app);
+  const base = `http://127.0.0.1:${server.address().port}`;
+  try {
+    const { json } = await postJson(base, '/appraise', {
+      hints: { artist: 'andy-warhol', title: "Campbell's Soup", medium: 'print' },
+    });
+    assert.equal(json.status, 'priced');
+    assert.equal(builds, 1, 'the first appraisal must reuse the prewarmed model');
+  } finally {
+    server.close();
+    db.close();
+  }
+});
+
+test('start command reserves enough heap for the model build', () => {
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  const match = String(pkg.scripts?.start || '').match(/--max-old-space-size=(\d+)/);
+  assert.ok(match, 'npm start must set --max-old-space-size');
+  assert.ok(
+    Number(match[1]) >= 20480,
+    `start heap ${match[1]} MB must fit the ~15 GB model build`,
+  );
+});
 
 test('GET /health returns ok', async () => {
   const db = seededDb();
